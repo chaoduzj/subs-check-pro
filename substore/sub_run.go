@@ -1,4 +1,5 @@
 // Package substore 用来处理 Sub-Store js引擎、运行、资源等
+// substore\sub_run.go
 package substore
 
 import (
@@ -42,6 +43,7 @@ type subStorePaths struct {
 	backendVerPath                    string
 	frontDir                          string
 	subsCheckProLogoPath              string
+	scpAppLogoPath                    string
 	singBoxLogoPath                   string
 	shadowrocketConfigPath            string
 	overYamlACL4SSRPath               string
@@ -86,6 +88,7 @@ func getSubStorePaths() (*subStorePaths, error) {
 		overYamlSinspiredRulesCDNPath:     filepath.Join(saver.OutputPath, "Mihomo-Rules-CDN.yaml"),
 		overYamlSinspiredRulesLiteCDNPath: filepath.Join(saver.OutputPath, "Mihomo-Rules-Lite-CDN.yaml"),
 		subsCheckProLogoPath:              filepath.Join(substoreSCPDir, "subs-check-pro.svg"),
+		scpAppLogoPath:                    filepath.Join(substoreSCPDir, "scp-app.svg"),
 		singBoxLogoPath:                   filepath.Join(substoreSCPDir, "sing-box.svg"),
 
 		kvStorePath: filepath.Join(substoreDir, "sub-store.json"),
@@ -419,6 +422,7 @@ func extractAssets(paths *subStorePaths) error {
 	// 3. 其它静态文本资源（Logo、配置模板等）
 	assetsList := []embeddedAsset{
 		{assets.EmbeddedSubsCheckProLogo, paths.subsCheckProLogoPath, "subs-check-pro svg logo"},
+		{assets.EmbeddedScpAppLogo, paths.scpAppLogoPath, "scp-app logo"},
 		{assets.EmbeddedSingBoxLogo, paths.singBoxLogoPath, "sing-box svg logo"},
 		{assets.EmbeddedShadowrocketConfig, paths.shadowrocketConfigPath, "Shadowrocket 配置文件"},
 		{assets.EmbeddedOverrideYamlACL4SSR, paths.overYamlACL4SSRPath, "ACL4SSR 配置文件"},

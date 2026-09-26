@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/goccy/go-json"
 )
 
 // LoonServer 现在只持有单个 engine
@@ -125,6 +127,37 @@ func (s *LoonServer) handleBackend(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(err.Error()))
 		return
+	}
+
+	if strings.Contains(req.URL, "/api/utils/env") {
+		var envData map[string]any
+		if err := json.Unmarshal([]byte(resp.Body), &envData); err == nil {
+			if data, ok := envData["data"].(map[string]any); ok {
+				meta, _ := data["meta"].(map[string]any)
+				if meta == nil {
+					meta = make(map[string]any)
+					data["meta"] = meta
+				}
+				node, _ := meta["node"].(map[string]any)
+				if node == nil {
+					node = make(map[string]any)
+					meta["node"] = node
+				}
+				envMap, _ := node["env"].(map[string]any)
+				if envMap == nil {
+					envMap = make(map[string]any)
+					node["env"] = envMap
+				}
+
+				// 在这里修改为你想要的后端名称和图标链接
+				envMap["SUB_STORE_BACKEND_CUSTOM_NAME"] = "Subs Check Pro"
+				envMap["SUB_STORE_BACKEND_CUSTOM_ICON"] = "/scp/scp-app.svg"
+
+				if modifiedBody, err := json.Marshal(envData); err == nil {
+					resp.Body = string(modifiedBody)
+				}
+			}
+		}
 	}
 
 	for k, v := range resp.Headers {

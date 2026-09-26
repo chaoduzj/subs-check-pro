@@ -2,18 +2,19 @@
 package substore
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/goccy/go-json"
 )
 
 type LoonKVStore struct {
 	mu        sync.RWMutex
-	mainPath  string            // 核心配置：sub-store.json
-	cachePath string            // 缓存文件：sub-store-cache.json
+	mainPath  string // 核心配置：sub-store.json
+	cachePath string // 缓存文件：sub-store-cache.json
 	cacheData map[string]string
 
 	saveTimer *time.Timer

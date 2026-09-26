@@ -28,5 +28,8 @@ var EmbeddedOverrideYamlSinspiredRulesLiteCDN []byte
 //go:embed scp-logo.svg
 var EmbeddedSubsCheckProLogo []byte
 
+//go:embed scp-app.svg
+var EmbeddedScpAppLogo []byte
+
 //go:embed sing-box.svg
 var EmbeddedSingBoxLogo []byte
