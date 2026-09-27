@@ -369,8 +369,13 @@ func (app *App) triggerCheck() {
 			slog.Info("下次检测时间", "time", app.formatNextRunTime(entries[0].Next, app.cron.Location()))
 		}
 	}
-	debug.FreeOSMemory()
 	check.CurrentStepName.Store("检测完成")
+
+	// 手动标记检测完成
+	app.checking.Store(false)
+
+	// 释放内存
+	releaseMemory()
 }
 
 // checkProxies 执行代理检测
@@ -398,9 +403,6 @@ func (app *App) checkProxies() error {
 	check.CurrentStepName.Store("保存配置")
 	save.SaveConfig(results)
 
-	check.CurrentStepName.Store("发送通知")
-	utils.SendNotifyCheckResult(len(results), check.CheckTrafficTotal)
-
 	check.CurrentStepName.Store("更新订阅")
 	utils.UpdateSubs()
 
@@ -419,10 +421,18 @@ func (app *App) checkProxies() error {
 	app.lastCheck.available.Store(int64(len(results)))
 	app.lastCheck.traffic.Store(int64(check.TotalBytes.Load()))
 
-	check.CurrentStepName.Store("内存释放")
+	check.CurrentStepName.Store("发送通知")
+	utils.SendNotifyCheckResult(len(results), check.CheckTrafficTotal)
+
+	check.CurrentStepName.Store("清理检测缓存")
 	// 切断所有大对象的应用
 	results = nil //nolint:ineffassign
 	proxyutils.ClearCache()
+	return nil
+}
+
+// releaseMemory 释放mihomo检测内存
+func releaseMemory() {
 	cleanupMihomo()
 
 	// 等待底层 xhttp/tcp goroutine 退出释放缓冲区
@@ -442,7 +452,6 @@ func (app *App) checkProxies() error {
 		"HeapInuse", ms.HeapInuse/1024/1024,
 		"HeapReleased", ms.HeapReleased/1024/1024,
 		"Sys", ms.Sys/1024/1024)
-	return nil
 }
 
 // waitGoroutinesDrain 等待残留 goroutine 退出
