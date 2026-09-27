@@ -15,14 +15,15 @@ import (
 
 // GetLogPath 获取日志路径
 func GetLogPath() (string, error) {
-	execPath := utils.GetPrivateStorageDir()
-	logDir := filepath.Join(execPath, "log")
+    baseDir := utils.GetPrivateStorageDir()
+    logDir := filepath.Join(baseDir, "config")
 
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		return "", fmt.Errorf("创建日志目录失败: %w", err)
-	}
+    // 确保目录存在
+    if err := os.MkdirAll(logDir, 0o755); err != nil {
+        return "", fmt.Errorf("创建日志目录失败: %w", err)
+    }
 
-	return filepath.Join(logDir, "subs-check-pro.log"), nil
+    return filepath.Join(logDir, "subs-check-pro.log"), nil
 }
 
 // GetLogLevel 获取配置的日志级别
