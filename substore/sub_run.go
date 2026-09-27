@@ -303,6 +303,13 @@ func startSubStore(ctx context.Context) error {
 	slog.Info("Sub-Store 服务启动", "port", strings.TrimPrefix(config.GlobalConfig.SubStorePort, ":"), "path", backendPath)
 	slog.Info("Sub-Store 面板地址", "url", fmt.Sprintf("http://localhost:%s/subs?api=%s", strings.TrimPrefix(config.GlobalConfig.SubStorePort, ":"), backendPath))
 
+	// 启动 Sub-Store 原生定时任务引擎
+	subPortOnly := strings.TrimPrefix(config.GlobalConfig.SubStorePort, ":")
+	cronEngine := StartSubStoreCronJobs(subPortOnly, backendPath)
+	if cronEngine != nil {
+		defer cronEngine.Stop() // 确保服务被重启或停止时，定时任务也同步停止
+	}
+
 	<-ctx.Done()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

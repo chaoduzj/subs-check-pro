@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
 	"os"
 	"runtime"
 	"strconv"
@@ -21,6 +22,8 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	"github.com/sinspired/subs-check-pro/v3/config"
+	"github.com/sinspired/subs-check-pro/v3/utils"
 
 	"github.com/buke/quickjs-go"
 )
@@ -94,7 +97,16 @@ func NewLoonEngine(scriptSrc []byte, scriptTag string, store *LoonKVStore, logge
 	rt := quickjs.NewRuntime()
 	ctx := rt.NewContext()
 
-	bLoon, _ := json.Marshal(map[string]any{"deviceName": runtime.GOOS, "systemVersion": runtime.GOOS, "loonVersion": "subs-check-pro", "build": "1"})
+	// 使用真实的 iPhone 及 Loon 参数，提高严苛机场订阅的拉取成功率
+	bLoon, _ := json.Marshal(map[string]any{
+		"deviceName":     "iPhone 16 Pro",
+		"systemVersion":  "18.0",
+		"loonVersion":    "3.2.1(750)",
+		"build":          "750",
+		"isSubsCheckPro": true,
+		"backendName":    "Subs Check Pro",
+	})
+
 	bScript, _ := json.Marshal(map[string]any{"name": scriptTag, "startTime": time.Now().UnixMilli()})
 
 	initScript := string(initScriptBytes)
@@ -225,6 +237,60 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 				subtitle := args[1].String()
 				content := args[2].String()
 				e.logger.Info("🔔 [通知] "+title, "subtitle", subtitle, "content", content)
+
+				// 接管推送逻辑
+				pushConfig := config.GlobalConfig.SubStorePushService
+				if pushConfig != "" {
+					go func(cfg, t, st, c string) {
+						// 拼接副标题和内容
+						pushMsg := c
+						if st != "" {
+							pushMsg = st + "  \n" + c
+						}
+
+						// 1. 兼容原版 GET 替换模式 (如: https://api.day.app/XXX/[推送标题]/[推送内容])
+						if strings.Contains(cfg, "[推送内容]") {
+							finalURL := strings.Replace(cfg, "[推送标题]", url.PathEscape(t), 1)
+							finalURL = strings.Replace(finalURL, "[推送内容]", url.PathEscape(pushMsg), 1)
+							resp, err := http.Get(finalURL)
+							if err == nil {
+								defer resp.Body.Close()
+							} else {
+								e.logger.Warn("Sub-Store HTTP 推送失败", "err", err)
+							}
+							return
+						}
+
+						// 2. Apprise 模式
+						var targetURLs string
+						if strings.ToLower(strings.TrimSpace(cfg)) == "apprise" {
+							// 填了 "apprise"，直接复用主程序中配好的接收渠道
+							targetURLs = strings.Join(config.GlobalConfig.RecipientURL, ",")
+						} else {
+							// 填了单独的 Apprise URI (如 bark://xxx, tgram://xxx)
+							targetURLs = cfg
+						}
+
+						if targetURLs == "" {
+							return
+						}
+
+						// 组装 Apprise 请求并交由 utils 处理
+						req := utils.NotifyRequest{
+							URLs:   targetURLs,
+							Body:   pushMsg,
+							Title:  t,
+							Format: "markdown",
+						}
+
+						// 直接调用 Notify 模块
+						if err := utils.Notify(req, ""); err != nil {
+							e.logger.Warn("Sub-Store Apprise 推送失败", "err", err)
+						} else {
+							e.logger.Debug("Sub-Store Apprise 推送成功")
+						}
+					}(pushConfig, title, subtitle, content)
+				}
 			}
 			return ctx.Undefined()
 		}))
@@ -263,16 +329,15 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 			method, reqOptsJSON, jsReqId := args[0].String(), args[1].String(), args[2].String()
 
 			type RequestOpts struct {
-				URL        string            `json:"url"`
-				Headers    map[string]string `json:"headers"`
-				Body       string            `json:"body"`
-				BodyB64    bool              `json:"body-base64"`
-				BodyBase64 bool              `json:"bodyBase64"`
-				// 新增高级参数适配
-				Timeout      int   `json:"timeout"`
-				AutoRedirect *bool `json:"auto-redirect"`
-				Redirection  *bool `json:"redirection"`
-				BinaryMode   bool  `json:"binary-mode"`
+				URL          string            `json:"url"`
+				Headers      map[string]string `json:"headers"`
+				Body         string            `json:"body"`
+				BodyB64      bool              `json:"body-base64"`
+				BodyBase64   bool              `json:"bodyBase64"`
+				Timeout      int               `json:"timeout"`
+				AutoRedirect *bool             `json:"auto-redirect"`
+				Redirection  *bool             `json:"redirection"`
+				BinaryMode   bool              `json:"binary-mode"`
 			}
 			var opts RequestOpts
 			_ = json.Unmarshal([]byte(reqOptsJSON), &opts)
@@ -303,10 +368,7 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 				// 支持脚本自定超时，增加上限阻断死锁
 				timeoutMs := 30000
 				if opts.Timeout > 0 {
-					timeoutMs = opts.Timeout
-					if timeoutMs > 300000 {
-						timeoutMs = 300000 // 最大5分钟
-					}
+					timeoutMs = min(opts.Timeout, 300000)
 				}
 				reqCtx, cancel := context.WithTimeout(execCtx, time.Duration(timeoutMs)*time.Millisecond)
 				defer cancel()

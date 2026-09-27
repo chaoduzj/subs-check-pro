@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	"github.com/robfig/cron/v3"
+	"github.com/sinspired/subs-check-pro/v3/config"
 )
 
 // LoonServer 现在只持有单个 engine
@@ -149,9 +151,23 @@ func (s *LoonServer) handleBackend(w http.ResponseWriter, r *http.Request) {
 					node["env"] = envMap
 				}
 
-				// 在这里修改为你想要的后端名称和图标链接
+				// 设置后端名称和图标
 				envMap["SUB_STORE_BACKEND_CUSTOM_NAME"] = "Subs Check Pro"
 				envMap["SUB_STORE_BACKEND_CUSTOM_ICON"] = "/scp/scp-app.svg"
+
+				// 注入配置变量
+				envMap["SUB_STORE_FRONTEND_BACKEND_PATH"] = config.GlobalConfig.SubStorePath
+				if config.GlobalConfig.SubStoreSyncCron != "" {
+					envMap["SUB_STORE_BACKEND_SYNC_CRON"] = config.GlobalConfig.SubStoreSyncCron
+				}
+				if config.GlobalConfig.SubStoreProduceCron != "" {
+					envMap["SUB_STORE_PRODUCE_CRON"] = config.GlobalConfig.SubStoreProduceCron
+				}
+				if config.GlobalConfig.SubStorePushService != "" {
+					envMap["SUB_STORE_PUSH_SERVICE"] = config.GlobalConfig.SubStorePushService
+				}
+				envMap["SUB_STORE_BODY_JSON_LIMIT"] = "30mb"
+				envMap["SUB_STORE_CORS_ALLOWED_ORIGINS"] = "*"
 
 				if modifiedBody, err := json.Marshal(envData); err == nil {
 					resp.Body = string(modifiedBody)
@@ -239,4 +255,145 @@ func (s *LoonServer) Start() error {
 
 func (s *LoonServer) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
+}
+
+// StartSubStoreCronJobs 解析配置并启动定时任务
+// 返回 *cron.Cron 以便在外层通过 defer 优雅关闭
+func StartSubStoreCronJobs(serverPort string, backendPath string) *cron.Cron {
+	c := cron.New()
+
+	apiBase := fmt.Sprintf("http://127.0.0.1:%s%s", serverPort, backendPath)
+	hasTask := false
+
+	// 1. 同步 Gist 任务: sub-store-sync-cron
+	syncCron := strings.TrimSpace(config.GlobalConfig.SubStoreSyncCron)
+	if syncCron != "" {
+		_, err := c.AddFunc(syncCron, func() {
+			slog.Debug("触发定时任务: 同步 Sub-Store 配置 (Sync)")
+
+			resp, err := http.Get(apiBase + "/api/sync")
+			if err != nil {
+				slog.Error("❌ 定时同步请求失败", "err", err)
+				return
+			}
+			defer resp.Body.Close()
+
+			slog.Debug(
+				"定时同步任务执行完毕",
+				"status",
+				resp.StatusCode,
+			)
+		})
+
+		if err != nil {
+			slog.Error(
+				"解析 Sync Cron 配置失败",
+				"err",
+				err,
+				"expr",
+				syncCron,
+			)
+		} else {
+			hasTask = true
+		}
+	}
+
+	// 2. 更新订阅任务: sub-store-produce-cron
+	produceCronStr := strings.TrimSpace(config.GlobalConfig.SubStoreProduceCron)
+	if produceCronStr != "" {
+		tasks := strings.SplitSeq(produceCronStr, ";")
+
+		for task := range tasks {
+			task = strings.TrimSpace(task)
+			if task == "" {
+				continue
+			}
+
+			parts := strings.SplitN(task, ",", 3)
+			if len(parts) != 3 {
+				slog.Error(
+					"Sub-Store Produce Cron 配置格式错误",
+					"task",
+					task,
+				)
+				continue
+			}
+
+			cronExpr := strings.TrimSpace(parts[0])
+			targetType := strings.TrimSpace(parts[1]) // sub 或 col
+			targetName := strings.TrimSpace(parts[2]) // 订阅名
+
+			// 明确复制到局部变量，避免闭包捕获循环变量问题
+			expr := cronExpr
+			typ := targetType
+			name := targetName
+
+			_, err := c.AddFunc(expr, func() {
+				slog.Debug(
+					"触发定时任务: 处理订阅 (缓存)",
+					"type",
+					typ,
+					"name",
+					name,
+				)
+
+				var targetURL string
+
+				if typ == "col" {
+					targetURL = fmt.Sprintf(
+						"%s/download/collection/%s",
+						apiBase,
+						url.PathEscape(name),
+					)
+				} else {
+					targetURL = fmt.Sprintf(
+						"%s/download/%s",
+						apiBase,
+						url.PathEscape(name),
+					)
+				}
+
+				resp, err := http.Get(targetURL)
+				if err != nil {
+					slog.Error(
+						"❌ 定时缓存任务请求失败",
+						"name",
+						name,
+						"err",
+						err,
+					)
+					return
+				}
+				defer resp.Body.Close()
+
+				slog.Debug(
+					"定时缓存任务执行完毕",
+					"name",
+					name,
+					"status",
+					resp.StatusCode,
+				)
+			})
+
+			if err != nil {
+				slog.Error(
+					"解析 Produce Cron 配置失败",
+					"err",
+					err,
+					"expr",
+					expr,
+				)
+			} else {
+				hasTask = true
+			}
+		}
+	}
+
+	if hasTask {
+		c.Start()
+		slog.Info("Sub-Store 定时任务", "Gist同步", syncCron, "订阅缓存", produceCronStr)
+		return c
+	}
+
+	return nil
 }
