@@ -140,7 +140,7 @@ func GetProxies(progressCallback func(stepName string, done, total, available in
 	ClearCache()
 
 	if progressCallback != nil {
-		progressCallback("检测可用代理", 0, 0, 0)
+		progressCallback("初始化代理环境", 0, 0, 0)
 	}
 
 	// 初始化代理环境变量
