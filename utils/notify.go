@@ -399,6 +399,11 @@ func SendNotifySubStoreAssets(frontendUpdated bool, frontendVer string, backendU
 
 	body := strings.Join(lines, "  \n")
 
+	// GUI 系统通知（Wails3 NotificationService）
+	if OSNotifyHook != nil {
+		OSNotifyHook(title, body)
+	}
+
 	// 发送通知
 	broadcastNotify(NotifySubStoreAssetsUpdate, title, body, "")
 }
