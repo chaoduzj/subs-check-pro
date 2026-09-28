@@ -280,6 +280,9 @@ speed-test-url: https://custom-domain/speedtest?bytes=1073741824
 
 完整文档请见 Wiki：[安卓手机命令行运行](https://github.com/sinspired/subs-check-pro/wiki/android)
 
+> [!TIP]
+> 🎉 Android 手机应用已发布，前往 [Subs Free](https://github.com/sinspired/subs-free) 体验
+
 ## ✨ 新增功能与性能优化详情
 
 完整说明请见 Wiki：[新增功能与性能优化详情](https://github.com/sinspired/subs-check-pro/wiki/Features-Details)
