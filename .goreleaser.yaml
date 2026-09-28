@@ -16,7 +16,7 @@ release:
     ---
     ![GitHub Downloads (all assets, specific tag)](https://img.shields.io/github/downloads/sinspired/subs-check-pro/{{ .Tag }}/total?style=flat&logo=github&label=当前版本下载次数&labelColor=black&color=0ea5a0)
 
-    - 🧪 v{{.Major}} 版本移除了 Node 依赖，移动端更友好，欢迎测试！
+    - 🧪 v{{.Major}} 移除Node，支持Android，大幅压缩体积，欢迎测试！
     - 💡 **完整变更日志**: [{{ .PreviousTag }}...{{ .Tag }}]({{ .GitURL }}/compare/{{ .PreviousTag }}...{{ .Tag }})
     - 🐳 Docker 镜像已发布 `docker pull sinspired/subs-check-pro:{{ .Version }}`
     - 💬 反馈方式
@@ -30,37 +30,37 @@ changelog:
   # 过滤掉不需要显示在日志中的提交
   filters:
     exclude:
-      - "^docs:"
-      - "^test:"
-      - "^style:"
-      - "^Merge pull request"
-      - "^Merge branch"
-      - "go mod tidy"
+      - '^docs:'
+      - '^test:'
+      - '^style:'
+      - '^Merge pull request'
+      - '^Merge branch'
+      - 'go mod tidy'
       - "^(?i)chore\\(doc\\):" # 过滤单纯的 README 调整
 
-  format: "{{ .SHA }}: {{ .Message }}"
+  format: '{{ .SHA }}: {{ .Message }}'
   # 提交分组配置
   groups:
-    - title: "✨ 新功能"
+    - title: '✨ 新功能'
       # 匹配 feat: 或 feat(scope): 且不区分大小写
       regexp: "^(?i)feat(\\([\\w-]+\\))?:+.*$"
       order: 0
-    - title: "🐛 Bug 修复"
+    - title: '🐛 Bug 修复'
       # 匹配 fix: 或 fix(scope): 且不区分大小写
       regexp: "^(?i)fix(\\([\\w-]+\\))?:+.*$"
       order: 1
-    - title: "🚀 性能优化"
+    - title: '🚀 性能优化'
       # 匹配 perf: 或 perf(scope): 且不区分大小写
       regexp: "^(?i)perf(\\([\\w-]+\\))?:+.*$"
       order: 2
-    - title: "🔧 重构维护"
+    - title: '🔧 重构维护'
       # 匹配 refactor/chore/build/ci 及其带作用域的形式
       regexp: "^(?i)(chore|refactor|build|ci)(\\([\\w-]+\\))?:+.*$"
       order: 3
-    - title: "📝 文档更新"
+    - title: '📝 文档更新'
       regexp: "^(?i)docs(\\([\\w-]+\\))?:+.*$"
       order: 4
-    - title: "📦 其他"
+    - title: '📦 其他'
       order: 999
 
 # 构建配置
@@ -78,7 +78,7 @@ builds:
       - linux_amd64
       - linux_arm64
       - linux_arm_7
-    mod_timestamp: "{{ .CommitTimestamp }}"
+    mod_timestamp: '{{ .CommitTimestamp }}'
     flags:
       - -trimpath
       # 添加 tags 强制 Go 使用内置 DNS 解析，防止在没有 glibc 的系统上 DNS 解析失败
@@ -97,7 +97,7 @@ builds:
     targets:
       - windows_amd64
       - windows_arm64
-    mod_timestamp: "{{ .CommitTimestamp }}"
+    mod_timestamp: '{{ .CommitTimestamp }}'
     flags:
       - -trimpath
     ldflags:
@@ -115,7 +115,7 @@ builds:
     targets:
       - darwin_amd64
       - darwin_arm64
-    mod_timestamp: "{{ .CommitTimestamp }}"
+    mod_timestamp: '{{ .CommitTimestamp }}'
     flags:
       - -trimpath
     ldflags:
@@ -151,12 +151,12 @@ dockers_v2:
     dockerfile: Dockerfile.goreleaser
     # 同时发布到 GitHub Container Registry 和 Docker Hub
     images:
-      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}"
-      - "{{ .Env.DOCKERHUB_USERNAME }}/subs-check-pro"
+      - 'ghcr.io/{{ .Env.GITHUB_REPOSITORY }}'
+      - '{{ .Env.DOCKERHUB_USERNAME }}/subs-check-pro'
 
     # 自动发布 latest 和 版本号
     tags:
-      - "{{ .Version }}"
+      - '{{ .Version }}'
       - '{{ if eq .Prerelease "" }}latest{{ end }}'
 
     # docker buildx 的平台列表
@@ -167,15 +167,15 @@ dockers_v2:
 
     # OCI 镜像规范标签
     annotations:
-      "org.opencontainers.image.title": "subs-check-pro"
-      "org.opencontainers.image.description": "高性能代理检测筛选工具，支持高并发测活、测速、媒体检测"
-      "org.opencontainers.image.created": "{{.Date}}"
-      "org.opencontainers.image.name": "{{.ProjectName}}"
-      "org.opencontainers.image.revision": "{{ .FullCommit }}"
-      "org.opencontainers.image.version": "{{ .Version }}"
-      "org.opencontainers.image.source": "{{.GitURL}}"
-      "org.opencontainers.image.base.name": "{{.BaseImage}}"
-      "org.opencontainers.image.base.digest": "{{.BaseImageDigest}}"
+      'org.opencontainers.image.title': 'subs-check-pro'
+      'org.opencontainers.image.description': '高性能代理检测筛选工具，支持高并发测活、测速、媒体检测'
+      'org.opencontainers.image.created': '{{.Date}}'
+      'org.opencontainers.image.name': '{{.ProjectName}}'
+      'org.opencontainers.image.revision': '{{ .FullCommit }}'
+      'org.opencontainers.image.version': '{{ .Version }}'
+      'org.opencontainers.image.source': '{{.GitURL}}'
+      'org.opencontainers.image.base.name': '{{.BaseImage}}'
+      'org.opencontainers.image.base.digest': '{{.BaseImageDigest}}'
     # 正式版本创建物料清单 (SBOM)，预发布版本跳过
     sbom: '{{ eq .Prerelease "" }}'
 
@@ -185,8 +185,10 @@ upx:
     enabled: true
     goos: [linux]
     goarch: [amd64, arm64, arm]
+    compress: best
 
   - ids: [subs-check-pro-windows]
     enabled: true
     goos: [windows]
     goarch: [amd64]
+    compress: best
