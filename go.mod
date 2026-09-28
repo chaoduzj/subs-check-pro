@@ -12,7 +12,7 @@ require (
 	github.com/docker/go-units v0.5.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gin-gonic/gin v1.12.0
-	github.com/goccy/go-json v0.10.6
+	github.com/goccy/go-json v0.11.1
 	github.com/goccy/go-yaml v1.19.2
 	github.com/juju/ratelimit v1.0.2
 	github.com/klauspost/compress v1.20.1
@@ -24,7 +24,7 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/samber/lo v1.53.0
 	github.com/sinspired/checkip v0.5.4
-	github.com/sinspired/subs-check-pro-webui v1.3.5
+	github.com/sinspired/subs-check-pro-webui v1.3.6
 	github.com/wailsapp/wails/v3 v3.0.0-beta.26
 	golang.org/x/net v0.59.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
@@ -61,7 +61,7 @@ require (
 	github.com/gin-contrib/sse v1.1.2 // indirect
 	github.com/go-fed/httpsig v1.1.0 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
-	github.com/go-playground/locales v0.14.1 // indirect
+	github.com/go-playground/locales v0.14.2 // indirect
 	github.com/go-playground/universal-translator v0.18.2 // indirect
 	github.com/go-playground/validator/v10 v10.30.5 // indirect
 	github.com/gobwas/httphead v0.1.0 // indirect
@@ -144,7 +144,7 @@ require (
 	github.com/openacid/low v0.1.21 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
-	github.com/pierrec/lz4/v4 v4.1.30 // indirect
+	github.com/pierrec/lz4/v4 v4.1.31 // indirect
 	github.com/pires/go-proxyproto v0.15.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.63.0 // indirect
