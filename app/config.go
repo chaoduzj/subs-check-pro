@@ -241,6 +241,10 @@ func (app *App) onConfigChange() {
 	oldSubStorePath := config.GlobalConfig.SubStorePath
 	oldSubStorePort := config.GlobalConfig.SubStorePort
 
+	// 记录旧的 Sub-Store 定时同步任务配置
+	oldSubStoreSyncCron := config.GlobalConfig.SubStoreSyncCron
+	oldSubStoreProduceCron := config.GlobalConfig.SubStoreProduceCron
+
 	if err := app.loadConfig(); err != nil {
 		slog.Error("重新加载配置文件失败", "error", err)
 		return
@@ -351,7 +355,13 @@ func (app *App) onConfigChange() {
 
 	// 检查后台 Sub-Store 资源更新任务是否发生变化
 	if oldSubStoreUpdateCron != config.GlobalConfig.SubStoreUpdateCron {
-		slog.Warn("Sub-Store 资源更新设置变化，重新配置 Sub-Store 定时更新任务")
+		slog.Warn("Sub-Store 资源更新设置变化，重新配置 Sub-Store 定时资源更新任务")
 		app.UpdateSubStoreCron()
+	}
+
+	// 检查 Sub-Store 原生定时任务（Gist 同步和缓存更新）是否发生变化
+	if oldSubStoreSyncCron != config.GlobalConfig.SubStoreSyncCron || oldSubStoreProduceCron != config.GlobalConfig.SubStoreProduceCron {
+		slog.Warn("Sub-Store 定时同步任务设置变化，重新配置 Sub-Store 定时同步任务")
+		substore.ReloadSubStoreCronJobs()
 	}
 }

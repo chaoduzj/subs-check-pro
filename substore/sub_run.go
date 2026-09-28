@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/robfig/cron/v3"
 	"github.com/sinspired/subs-check-pro/v3/assets"
 	"github.com/sinspired/subs-check-pro/v3/config"
 	"github.com/sinspired/subs-check-pro/v3/save/method"
@@ -35,7 +36,12 @@ var currentLoonServer atomic.Pointer[LoonServer]
 // 以下三个用于支撑 ReloadSubStoreEngine：资产更新后不重启进程也能让新脚本生效。
 var currentSubStorePaths atomic.Pointer[subStorePaths]
 var currentLoonStore atomic.Pointer[LoonKVStore]
+
+// currentSubLogger 持有当前运行中的 Sub-Store 日志拦截器
 var currentSubLogger atomic.Pointer[slog.Logger]
+
+// currentSubStoreCron 持有当前运行中的 Sub-Store 定时同步任务引擎
+var currentSubStoreCron atomic.Pointer[cron.Cron]
 
 type subStorePaths struct {
 	substoreDir                       string
@@ -307,8 +313,14 @@ func startSubStore(ctx context.Context) error {
 	subPortOnly := strings.TrimPrefix(config.GlobalConfig.SubStorePort, ":")
 	cronEngine := StartSubStoreCronJobs(subPortOnly, backendPath)
 	if cronEngine != nil {
-		defer cronEngine.Stop() // 确保服务被重启或停止时，定时任务也同步停止
+		currentSubStoreCron.Store(cronEngine)
 	}
+	defer func() {
+		// 确保服务崩溃或停止时，清理对应的定时任务
+		if c := currentSubStoreCron.Swap(nil); c != nil {
+			c.Stop()
+		}
+	}()
 
 	<-ctx.Done()
 
