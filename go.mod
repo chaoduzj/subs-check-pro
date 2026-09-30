@@ -12,7 +12,7 @@ require (
 	github.com/docker/go-units v0.5.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gin-gonic/gin v1.12.0
-	github.com/goccy/go-json v0.11.1
+	github.com/goccy/go-json v0.11.2
 	github.com/goccy/go-yaml v1.19.2
 	github.com/juju/ratelimit v1.0.2
 	github.com/klauspost/compress v1.20.1
@@ -20,11 +20,11 @@ require (
 	github.com/mattn/go-colorable v0.1.15
 	github.com/metacubex/mihomo v1.19.31
 	github.com/minio/minio-go/v7 v7.3.0
-	github.com/oschwald/maxminddb-golang/v2 v2.6.0
+	github.com/oschwald/maxminddb-golang/v2 v2.7.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/samber/lo v1.53.0
 	github.com/sinspired/checkip v0.5.4
-	github.com/sinspired/subs-check-pro-webui v1.3.6
+	github.com/sinspired/subs-check-pro-webui v1.3.7
 	github.com/wailsapp/wails/v3 v3.0.0-beta.26
 	golang.org/x/net v0.59.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
@@ -37,7 +37,7 @@ require (
 	github.com/Yawning/aez v0.0.0-20211027044916-e49e68abd344 // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
-	github.com/andybalholm/brotli v1.2.5 // indirect
+	github.com/andybalholm/brotli v1.2.6 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
 	github.com/bytedance/sonic v1.15.4 // indirect
@@ -49,7 +49,7 @@ require (
 	github.com/davidmz/go-pageant v1.0.2 // indirect
 	github.com/dunglas/httpsfv v1.1.2 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
-	github.com/easytier/easytier/easytier-go v0.0.0-20260924040536-ff3921ce6842 // indirect
+	github.com/easytier/easytier/easytier-go v0.0.0-20260930032809-ed73d318bb3b // indirect
 	github.com/enfein/mieru/v3 v3.38.0 // indirect
 	github.com/ericlagergren/aegis v0.0.0-20250325060835-cd0defd64358 // indirect
 	github.com/ericlagergren/polyval v0.0.0-20230805202542-18692a1b76f9 // indirect
@@ -109,7 +109,7 @@ require (
 	github.com/metacubex/jls-tls v0.0.0-20260723084315-67adc0e2f796 // indirect
 	github.com/metacubex/jsonv2 v0.0.0-20260721082349-16b4998c8f89 // indirect
 	github.com/metacubex/kcp-go v0.0.0-20260105040817-550693377604 // indirect
-	github.com/metacubex/mipstack v0.0.0-20260926151545-332a03e253ef // indirect
+	github.com/metacubex/mipstack v0.0.0-20260929145719-a4e600e17158 // indirect
 	github.com/metacubex/mlkem v0.1.0 // indirect
 	github.com/metacubex/qpack v0.6.0 // indirect
 	github.com/metacubex/quic-go v0.61.1-0.20260727080200-2548683b76f4 // indirect
