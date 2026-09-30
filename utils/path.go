@@ -1,5 +1,4 @@
-// utils/path.go
-//go:build !android && !ios
+//go:build !setup && !android && !ios
 
 package utils
 
@@ -9,6 +8,7 @@ import (
 	"path/filepath"
 )
 
+// 没有 setup 标签时编译此文件 (便携模式)
 func GetPrivateStorageDir() string {
 	ex, err := os.Executable()
 	if err != nil {
@@ -19,5 +19,5 @@ func GetPrivateStorageDir() string {
 }
 
 func GetExternalStorageDir() string {
-    return GetPrivateStorageDir()
-	}
+	return GetPrivateStorageDir()
+}
