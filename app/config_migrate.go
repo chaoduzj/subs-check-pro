@@ -30,6 +30,7 @@ type migrateConfigView struct {
 	} `yaml:"sub-process"`
 
 	MihomoOverwriteURL string `yaml:"mihomo-overwrite-url"`
+	CronExpression     string `yaml:"cron-expression"`
 }
 
 // singBoxConfigV1 仅用于重写 YAML 文本（json/js 统一为 []string）
@@ -165,6 +166,15 @@ func (app *App) migrateConfig() error {
 			migrated = append(migrated, "mihomo-overwrite-url")
 			slog.Debug("mihomo-overwrite-url 已迁移为新规则文件名")
 		}
+	}
+
+	// 迁移 cron-expression 频率
+	if strings.TrimSpace(view.CronExpression) == "0 4,16 * * *" {
+		newCron := "0 4 */2 * *"
+		content = rewriteCronExpression(content, newCron)
+		needWrite = true
+		migrated = append(migrated, "cron-expression")
+		slog.Debug("cron-expression 已迁移为每两天的凌晨四点")
 	}
 
 	// 写回文件
@@ -405,6 +415,26 @@ func rewriteMihomoOverwriteURL(content, newURL string) string {
 			keyIndent := strings.Repeat(" ", indent)
 
 			lines[i] = keyIndent + "mihomo-overwrite-url: " + newURL
+			return strings.Join(lines, "\n")
+		}
+	}
+
+	return content
+}
+
+// rewriteCronExpression 在原始 YAML 文本中替换 cron-expression 的值
+func rewriteCronExpression(content, newCron string) string {
+	lines := strings.Split(content, "\n")
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "cron-expression:") {
+
+			indent := len(line) - len(strings.TrimLeft(line, " \t"))
+			keyIndent := strings.Repeat(" ", indent)
+
+			// YAML 中含有通配符(如 *)的字符串建议加双引号避免被识别为 Alias 抛错
+			lines[i] = keyIndent + "cron-expression: \"" + newCron + "\""
 			return strings.Join(lines, "\n")
 		}
 	}
