@@ -34,12 +34,14 @@ type SubUrls struct {
 type SubStat struct {
 	Total   int
 	Success int
+	ErrMsg  string // 记录拉取失败的具体原因
 }
 
 var (
 	ErrIgnore           = errors.New("error-ignore") // ErrIgnore 标记无需记录日志的非致命错误
 	uniqueSubsCount int = 0                          // 去重后的订阅数量
 	SubStats            = make(map[string]SubStat)   // SubStats 存储订阅总数和成功数
+	SubStatsMutex   sync.Mutex
 
 	// totalRawHits 统计「层 1」：解析阶段产出的全部候选节点数。
 	totalRawHits atomic.Int64
@@ -112,6 +114,46 @@ func logFatal(err error, urlStr string) {
 		// 普通错误
 		slog.Error("获取失败", "URL", urlStr, "error", err)
 	}
+}
+
+// 提取错误原因工具函数
+func getErrorReason(err error) string {
+	errStr := err.Error()
+	if code, convErr := strconv.Atoi(errStr); convErr == nil {
+		switch code {
+		case 400:
+			return "错误请求(400)"
+		case 401, 403:
+			return "无权限访问(401/403)"
+		case 404:
+			return "订阅失效(404)"
+		case 405:
+			return "方法不被允许(405)"
+		case 408:
+			return "请求超时(408)"
+		case 410:
+			return "资源已删除(410)"
+		case 429:
+			return "限流/请求过多(429)" // 明确标出限流
+		case 500, 502, 503, 504:
+			return fmt.Sprintf("服务端错误(%d)", code)
+		default:
+			return fmt.Sprintf("请求失败(%d)", code)
+		}
+	}
+
+	// 增加对网络底层波动的抓取
+	lowerErr := strings.ToLower(errStr)
+	if strings.Contains(lowerErr, "timeout") || strings.Contains(lowerErr, "deadline") {
+		return "请求超时(网络波动)"
+	}
+	if strings.Contains(lowerErr, "connection refused") || strings.Contains(lowerErr, "reset by peer") {
+		return "连接被拒/重置(网络异常)"
+	}
+	if strings.Contains(lowerErr, "no such host") {
+		return "域名解析失败"
+	}
+	return "获取失败"
 }
 
 func initMemory() {
@@ -226,9 +268,11 @@ func GetProxies(progressCallback func(stepName string, done, total, available in
 
 				// 统计订阅源
 				if su, ok := proxy["sub_url"].(string); ok && su != "" {
+					SubStatsMutex.Lock()
 					st := SubStats[su]
 					st.Total++
 					SubStats[su] = st
+					SubStatsMutex.Unlock()
 				}
 
 				// 计算优先级
@@ -509,10 +553,25 @@ func processSubscription(
 	out chan<- []map[string]any,
 	batchSize int, // 由 GetProxies 传入，统一管理
 ) bool {
+	// 预先初始化该 URL 的统计记录。
+	// 防止出现请求 HTTP 200 成功但内容为空白（0节点），
+	// 导致既没有触发 err 也无法进入 proxyChan，从而在报告中彻底消失的问题。
+	SubStatsMutex.Lock()
+
+	if _, exists := SubStats[urlStr]; !exists {
+		SubStats[urlStr] = SubStat{}
+	}
+	SubStatsMutex.Unlock()
 	data, err := FetchSubsData(urlStr)
 	if err != nil {
 		if !errors.Is(err, ErrIgnore) {
 			logFatal(err, urlStr)
+			// 记录由于网络或服务端导致的致命错误
+			SubStatsMutex.Lock()
+			st := SubStats[urlStr]
+			st.ErrMsg = getErrorReason(err)
+			SubStats[urlStr] = st
+			SubStatsMutex.Unlock()
 		}
 		return false
 	}

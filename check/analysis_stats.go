@@ -74,9 +74,11 @@ func (pc *ProxyChecker) GenerateAnalysisReport() {
 	for _, result := range pc.results {
 		if result.Proxy != nil {
 			if subURL, ok := result.Proxy["sub_url"].(string); ok {
+				proxyutils.SubStatsMutex.Lock() // 加锁
 				stats := proxyutils.SubStats[subURL]
 				stats.Success++
 				proxyutils.SubStats[subURL] = stats
+				proxyutils.SubStatsMutex.Unlock() // 解锁
 			}
 		}
 	}
@@ -356,6 +358,12 @@ func saveDetailedAnalysis(global *AnalysisStats, subs map[string]*AnalysisStats,
 			sbBad.WriteString(", total: ")
 			sbBad.WriteString(strconv.Itoa(pStat.Total))
 			sbBad.WriteString(" }\n")
+			// 写入明确的失效原因
+			if pStat.ErrMsg != "" {
+				sbBad.WriteString("    error: \"")
+				sbBad.WriteString(pStat.ErrMsg)
+				sbBad.WriteString("\"\n")
+			}
 		}
 	}
 

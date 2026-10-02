@@ -428,6 +428,11 @@ func (app *App) checkProxies() error {
 	// 切断所有大对象的应用
 	results = nil //nolint:ineffassign
 	proxyutils.ClearCache()
+
+	// 每次运行清理旧缓存，防止多轮执行后失效订阅残留或混淆
+	proxyutils.SubStatsMutex.Lock()
+	proxyutils.SubStats = make(map[string]proxyutils.SubStat)
+	proxyutils.SubStatsMutex.Unlock()
 	return nil
 }
 
