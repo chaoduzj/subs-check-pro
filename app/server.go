@@ -582,7 +582,7 @@ func (app *App) getStatus(c *gin.Context) {
 
 		"subStorePort":  config.GlobalConfig.SubStorePort,
 		"subStorePath":  config.GlobalConfig.SubStorePath,
-		"singboxExtra":    substore.ExtraSingboxVersion,
+		"singboxExtra":  substore.ExtraSingboxVersion,
 		"singboxLatest": substore.LatestSingboxVersion,
 	})
 }
@@ -725,13 +725,12 @@ func AnalysisReportPath() (string, error) {
 func (app *App) getAnalysisReport(c *gin.Context) {
 	reportPath, err := AnalysisReportPath()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"report": ""}) // 路径错误返回空，不报错
+		c.JSON(http.StatusOK, gin.H{"report_data": nil})
 		return
 	}
 
-	// 检查文件是否存在
 	if _, err := os.Stat(reportPath); os.IsNotExist(err) {
-		c.JSON(http.StatusOK, gin.H{"report": ""}) // 文件不存在返回空
+		c.JSON(http.StatusOK, gin.H{"report_data": nil})
 		return
 	}
 
@@ -741,7 +740,18 @@ func (app *App) getAnalysisReport(c *gin.Context) {
 		return
 	}
 
-	// 返回 JSON 对象，包含 report 字符串
+	// 直接在 Go 端把 YAML 解析为 map，框架会自动将其序列化为超高效率的 JSON 返回
+	var parsedData any
+	if err := yaml.Unmarshal(data, &parsedData); err == nil {
+		// 返回 parsedData 给前端，同时保留一个 raw_report 兼容老逻辑
+		c.JSON(http.StatusOK, gin.H{
+			"report_data": parsedData,
+			"report":      string(data),
+		})
+		return
+	}
+
+	// 解析失败的兜底
 	c.JSON(http.StatusOK, gin.H{"report": string(data)})
 }
 
