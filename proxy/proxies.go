@@ -39,6 +39,46 @@ type SubStat struct {
 	Size    int    // 订阅文件自身下载的大小
 }
 
+// RemoteStat 记录单个远程订阅清单的拉取结果。
+//
+// 远程订阅拉取到的是「订阅链接列表」，每个链接的节点统计已经保存在 SubStats 中，
+// 这里只记录「清单 → 链接」的归属关系，报告阶段据此把各链接的统计归到对应的远程订阅下。
+type RemoteStat struct {
+	URL    string   // 配置中填写的原始地址（不含 GitHub 加速/规范化处理，便于前端按配置匹配）
+	Count  int      // 拉取到的订阅链接总数（订阅清单内部原始条数，未做跨来源去重）
+	URLs   []string // 拉取到的订阅链接，保持清单中的原始顺序
+	ErrMsg string   // 清单本身拉取失败或解析不到链接的原因
+}
+
+var (
+	// RemoteStats 按配置顺序记录每个远程订阅清单的拉取结果
+	RemoteStats      []RemoteStat
+	RemoteStatsMutex sync.Mutex
+)
+
+// resetRemoteStats 每轮检测开始前清空远程订阅统计，避免跨轮次累积
+func resetRemoteStats() {
+	RemoteStatsMutex.Lock()
+	RemoteStats = nil
+	RemoteStatsMutex.Unlock()
+}
+
+// recordRemoteStat 记录一个远程订阅清单的拉取结果
+func recordRemoteStat(st RemoteStat) {
+	RemoteStatsMutex.Lock()
+	RemoteStats = append(RemoteStats, st)
+	RemoteStatsMutex.Unlock()
+}
+
+// SnapshotRemoteStats 返回远程订阅统计的副本，供报告生成时安全读取
+func SnapshotRemoteStats() []RemoteStat {
+	RemoteStatsMutex.Lock()
+	defer RemoteStatsMutex.Unlock()
+	out := make([]RemoteStat, len(RemoteStats))
+	copy(out, RemoteStats)
+	return out
+}
+
 var (
 	ErrIgnore           = errors.New("error-ignore") // ErrIgnore 标记无需记录日志的非致命错误
 	uniqueSubsCount int = 0                          // 去重后的订阅数量
@@ -385,6 +425,9 @@ func resolveSubUrls(progressCallback func(stepName string, done, total, availabl
 	var localNum, remoteNum, historyNum int
 	localNum = len(config.GlobalConfig.SubUrls)
 
+	// 每轮检测重新统计远程订阅清单
+	resetRemoteStats()
+
 	urls := make([]string, 0, len(config.GlobalConfig.SubUrls))
 	urls = append(urls, config.GlobalConfig.SubUrls...)
 
@@ -396,17 +439,38 @@ func resolveSubUrls(progressCallback func(stepName string, done, total, availabl
 		var fetched int
 		var valid int
 		for _, subURLRemote := range config.GlobalConfig.SubUrlsRemote {
+			// 保留配置中的原始地址作为统计 key，前端按配置地址匹配
+			cfgRemoteURL := strings.TrimSpace(subURLRemote)
 			// 处理为标准的raw地址
 			subURLRemote = utils.NormalizeGitHubRawURL(subURLRemote)
 			warped := utils.WarpURL(subURLRemote, utils.IsGhProxyAvailable)
 			if remote, err := fetchRemoteSubUrls(warped); err != nil {
 				if !errors.Is(err, ErrIgnore) {
 					logFatal(err, subURLRemote)
+					recordRemoteStat(RemoteStat{URL: cfgRemoteURL, ErrMsg: getErrorReason(err)})
+				} else {
+					// ErrIgnore：日期占位符链接今日/昨日均不可用，不打日志但报告里要有原因
+					recordRemoteStat(RemoteStat{URL: cfgRemoteURL, ErrMsg: "日期占位符链接今日/昨日均不可用"})
 				}
 			} else {
 				valid++
 				remoteNum += len(remote)
 				urls = append(urls, remote...)
+
+				// 记录归属关系：过滤规则与下方去重保持一致（空行、# 开头的忽略）
+				listed := make([]string, 0, len(remote))
+				for _, r := range remote {
+					r = strings.TrimSpace(r)
+					if r == "" || strings.HasPrefix(r, "#") {
+						continue
+					}
+					listed = append(listed, r)
+				}
+				st := RemoteStat{URL: cfgRemoteURL, Count: len(listed), URLs: listed}
+				if len(listed) == 0 {
+					st.ErrMsg = "未解析到任何订阅链接"
+				}
+				recordRemoteStat(st)
 			}
 			fetched++
 			if progressCallback != nil {

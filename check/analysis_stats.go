@@ -426,7 +426,55 @@ func saveDetailedAnalysis(global *AnalysisStats, subs map[string]*AnalysisStats,
 		}
 	}
 
-	_ = method.SaveToStats([]byte(sb.String()+sbBad.String()), "subs-analysis.yaml", "分析结果")
+	// 4. 远程订阅清单：每个清单拉取到的订阅链接及其归属关系。
+	// 链接自身的统计（成功率/协议/地区/错误原因）已在上方 subs_ranking / subs_ranking_bad 中，
+	// 前端按 URL 关联后展示在对应的远程订阅下方，这里不重复存一份。
+	sbRemote := buildRemoteSubsYAML(proxyutils.SnapshotRemoteStats())
+
+	_ = method.SaveToStats([]byte(sb.String()+sbBad.String()+sbRemote), "subs-analysis.yaml", "分析结果")
+}
+
+// buildRemoteSubsYAML 生成 remote_subs 段，结构示例：
+//
+//	remote_subs:
+//	  - url: "https://example.com/list.txt"
+//	    count: 12
+//	    error: "..."        # 仅在清单拉取失败/解析不到链接时出现
+//	    urls:
+//	      - "https://a.example.com/sub"
+//
+// 字符串统一使用 strconv.Quote 输出双引号标量：其转义序列均为合法的 YAML 双引号转义，
+// 可避免 URL 中的 # {} : 等字符被 YAML 误解析。
+func buildRemoteSubsYAML(remotes []proxyutils.RemoteStat) string {
+	if len(remotes) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\nremote_subs:\n")
+	for _, r := range remotes {
+		sb.WriteString("  - url: ")
+		sb.WriteString(strconv.Quote(r.URL))
+		sb.WriteString("\n    count: ")
+		sb.WriteString(strconv.Itoa(r.Count))
+		sb.WriteString("\n")
+		if r.ErrMsg != "" {
+			sb.WriteString("    error: ")
+			sb.WriteString(strconv.Quote(r.ErrMsg))
+			sb.WriteString("\n")
+		}
+		if len(r.URLs) == 0 {
+			sb.WriteString("    urls: []\n")
+			continue
+		}
+		sb.WriteString("    urls:\n")
+		for _, u := range r.URLs {
+			sb.WriteString("      - ")
+			sb.WriteString(strconv.Quote(u))
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
 }
 
 // generateSummary 生成单段落详细摘要
