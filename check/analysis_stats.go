@@ -282,6 +282,17 @@ func saveDetailedAnalysis(global *AnalysisStats, subs map[string]*AnalysisStats,
 	sb.WriteString("  check_traffic_download_raw: ")
 	sb.WriteString(strconv.FormatUint(DOWN.Load(), 10))
 	sb.WriteString("\n")
+	// 计算本次检测所有订阅下载消耗的总流量
+	var totalSubSize uint64
+	for _, stat := range proxyutils.SubStats {
+		totalSubSize += uint64(stat.Size)
+	}
+	sb.WriteString("  check_sub_download_traffic: ")
+	sb.WriteString(utils.FormatTraffic(totalSubSize))
+	sb.WriteString("\n")
+	sb.WriteString("  check_sub_download_traffic_raw: ")
+	sb.WriteString(strconv.FormatUint(totalSubSize, 10))
+	sb.WriteString("\n")
 
 	var speedText string
 	if speedON {
@@ -368,6 +379,12 @@ func saveDetailedAnalysis(global *AnalysisStats, subs map[string]*AnalysisStats,
 				sb.WriteString(utils.FormatTraffic(pStat.Traffic))
 				sb.WriteString("\n")
 			}
+			// 输出该订阅文件的大小
+			if pStat.Size > 0 {
+				sb.WriteString("    file_size: ")
+				sb.WriteString(utils.FormatTraffic(uint64(pStat.Size)))
+				sb.WriteString("\n")
+			}
 			sb.WriteString("    protocols: { ")
 			sb.WriteString(formatMapToInline(st.Types))
 			sb.WriteString(" }\n")
@@ -392,6 +409,12 @@ func saveDetailedAnalysis(global *AnalysisStats, subs map[string]*AnalysisStats,
 			if pStat.Traffic > 0 {
 				sbBad.WriteString("    traffic: ")
 				sbBad.WriteString(utils.FormatTraffic(pStat.Traffic))
+				sbBad.WriteString("\n")
+			}
+			// 输出该订阅文件的大小
+			if pStat.Size > 0 {
+				sbBad.WriteString("    file_size: ")
+				sbBad.WriteString(utils.FormatTraffic(uint64(pStat.Size)))
 				sbBad.WriteString("\n")
 			}
 			// 写入明确的失效原因

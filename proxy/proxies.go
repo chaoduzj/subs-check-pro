@@ -36,6 +36,7 @@ type SubStat struct {
 	Success int
 	ErrMsg  string // 记录拉取失败的具体原因
 	Traffic uint64 // 消耗流量
+	Size    int    // 订阅文件自身下载的大小
 }
 
 var (
@@ -577,6 +578,13 @@ func processSubscription(
 		return false
 	}
 
+	// 记录该订阅文件自身的大小
+	SubStatsMutex.Lock()
+	st_size := SubStats[urlStr]
+	st_size.Size = len(data)
+	SubStats[urlStr] = st_size
+	SubStatsMutex.Unlock()
+
 	var (
 		rawHits      int // 层 1：解析阶段产出的候选节点数（可能含同订阅内跨解析器重复，见 parse/stream.go）
 		validCount   int // 层 2：通过类型/端口校验、实际发往全局去重队列的节点数（去重前）
@@ -689,6 +697,7 @@ func processSubscription(
 	slog.Debug("订阅解析完成",
 		"URL", urlStr,
 		"候选", rawHits,
+		"文件大小", utils.FormatTraffic(uint64(st_size.Size)),
 		"类型过滤", typeFiltered,
 		"入队", validCount,
 	)
