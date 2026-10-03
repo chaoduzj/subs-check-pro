@@ -35,6 +35,7 @@ type SubStat struct {
 	Total   int
 	Success int
 	ErrMsg  string // 记录拉取失败的具体原因
+	Traffic uint64 // 消耗流量
 }
 
 var (

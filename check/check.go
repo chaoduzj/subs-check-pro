@@ -84,6 +84,7 @@ type Result struct {
 	Country        string
 	CountryCodeTag string
 	ISPTag         string
+	Speed          int
 }
 
 // ProxyChecker 处理代理检测的主要结构体
@@ -131,6 +132,18 @@ type ProxyJob struct {
 func (job *ProxyJob) Close() {
 	job.doneOnce.Do(func() {
 		if job.Client != nil {
+			// 在关闭前读取该节点消耗的总流量
+			traffic := job.Client.BytesRead.Load() + job.Client.BytesWritten.Load()
+			if traffic > 0 && job.Result.Proxy != nil {
+				if subURL, ok := job.Result.Proxy["sub_url"].(string); ok && subURL != "" {
+					proxyutils.SubStatsMutex.Lock()
+					st := proxyutils.SubStats[subURL]
+					st.Traffic += traffic // 累加流量到订阅统计中
+					proxyutils.SubStats[subURL] = st
+					proxyutils.SubStatsMutex.Unlock()
+				}
+			}
+
 			job.Client.Close()
 			job.Client = nil // 切断对底层资源的引用
 		}
@@ -846,6 +859,9 @@ func (pc *ProxyChecker) runMediaStageAndCollect(db *maxminddb.Reader, ctx contex
 				}
 
 				pc.updateProxyName(&job.Result, job.Client, job.Speed, db, job.CfLoc, job.CfIP, ctx)
+
+				// 记录节点下载速度
+				job.Result.Speed = job.Speed
 
 				// 将结果发送到 collector
 				pc.resultChan <- job.Result

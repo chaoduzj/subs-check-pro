@@ -13,6 +13,7 @@ import (
 	"github.com/sinspired/subs-check-pro/v3/config"
 	proxyutils "github.com/sinspired/subs-check-pro/v3/proxy"
 	"github.com/sinspired/subs-check-pro/v3/save/method"
+	"github.com/sinspired/subs-check-pro/v3/utils"
 )
 
 var (
@@ -46,14 +47,16 @@ var LastCheckResultStr atomic.Value
 
 // AnalysisStats 统计结构
 type AnalysisStats struct {
-	Total     int
-	Types     map[string]int
-	Countries map[string]int
-	CFIncon   map[string]int // ⁰ (不一致)
-	CFCon     map[string]int // ¹⁺ (一致)
-	CFBlock   map[string]int // ⁻¹ (proxyIP 异常)
-	NonCF     map[string]int // ² (独立VPS)
-	Media     map[string]int
+	Total      int
+	Types      map[string]int
+	Countries  map[string]int
+	CFIncon    map[string]int // ⁰ (不一致)
+	CFCon      map[string]int // ¹⁺ (一致)
+	CFBlock    map[string]int // ⁻¹ (proxyIP 异常)
+	NonCF      map[string]int // ² (独立VPS)
+	Media      map[string]int
+	SpeedSum   int // 速度总和
+	SpeedCount int // 参与测速数量
 }
 
 func newAnalysisStats() *AnalysisStats {
@@ -98,6 +101,12 @@ func (pc *ProxyChecker) GenerateAnalysisReport() {
 		update := func(s *AnalysisStats) {
 			s.Total++
 			s.Types[pType]++
+
+			// 如果有速度则累计平均速度
+			if speedON && result.Speed > 0 {
+				s.SpeedSum += result.Speed
+				s.SpeedCount++
+			}
 
 			// 节点属性识别
 			hasTag := false
@@ -341,8 +350,29 @@ func saveDetailedAnalysis(global *AnalysisStats, subs map[string]*AnalysisStats,
 			sb.WriteString(", total: ")
 			sb.WriteString(strconv.Itoa(pStat.Total))
 			sb.WriteString(" }\n")
+			// 输出平均速度
+			if speedON && st.SpeedCount > 0 {
+				avgSpeed := st.SpeedSum / st.SpeedCount
+				sb.WriteString("    avg_speed: ")
+				if avgSpeed < 100 {
+					sb.WriteString(strconv.Itoa(avgSpeed))
+					sb.WriteString(" KB/s\n")
+				} else {
+					sb.WriteString(strconv.FormatFloat(float64(avgSpeed)/1024, 'f', 1, 64))
+					sb.WriteString(" MB/s\n")
+				}
+			}
+			// 输出流量
+			if pStat.Traffic > 0 {
+				sb.WriteString("    traffic: ")
+				sb.WriteString(utils.FormatTraffic(pStat.Traffic))
+				sb.WriteString("\n")
+			}
 			sb.WriteString("    protocols: { ")
 			sb.WriteString(formatMapToInline(st.Types))
+			sb.WriteString(" }\n")
+			sb.WriteString("    locations: { ")
+			sb.WriteString(formatMapToInline(st.Countries))
 			sb.WriteString(" }\n")
 			sb.WriteString("    top_locations: [")
 			sb.WriteString(getTopKeys(st.Countries, 3))
@@ -358,6 +388,12 @@ func saveDetailedAnalysis(global *AnalysisStats, subs map[string]*AnalysisStats,
 			sbBad.WriteString(", total: ")
 			sbBad.WriteString(strconv.Itoa(pStat.Total))
 			sbBad.WriteString(" }\n")
+			// 输出消耗的流量
+			if pStat.Traffic > 0 {
+				sbBad.WriteString("    traffic: ")
+				sbBad.WriteString(utils.FormatTraffic(pStat.Traffic))
+				sbBad.WriteString("\n")
+			}
 			// 写入明确的失效原因
 			if pStat.ErrMsg != "" {
 				sbBad.WriteString("    error: \"")
