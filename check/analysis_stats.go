@@ -282,15 +282,15 @@ func saveDetailedAnalysis(global *AnalysisStats, subs map[string]*AnalysisStats,
 	sb.WriteString("  check_traffic_download_raw: ")
 	sb.WriteString(strconv.FormatUint(DOWN.Load(), 10))
 	sb.WriteString("\n")
-	// 计算本次检测所有订阅下载消耗的总流量
+	// 计算本次检测所有订阅文件的大小
 	var totalSubSize uint64
 	for _, stat := range proxyutils.SubStats {
 		totalSubSize += uint64(stat.Size)
 	}
-	sb.WriteString("  check_sub_download_traffic: ")
+	sb.WriteString("  total_subs_size: ")
 	sb.WriteString(utils.FormatTraffic(totalSubSize))
 	sb.WriteString("\n")
-	sb.WriteString("  check_sub_download_traffic_raw: ")
+	sb.WriteString("  total_subs_size_raw: ")
 	sb.WriteString(strconv.FormatUint(totalSubSize, 10))
 	sb.WriteString("\n")
 
