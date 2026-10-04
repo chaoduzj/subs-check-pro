@@ -458,6 +458,18 @@ func GetProxies(progressCallback func(stepName string, done, total, available in
 		cleanMetadata(node)
 	}
 
+	// 计算本次检测所有订阅文件的体积
+	var totalSubSize uint64
+	for _, stat := range SubStats {
+		totalSubSize += uint64(stat.Size)
+	}
+
+	totalSubSizeStr := utils.FormatTraffic(totalSubSize)
+
+	slog.Info("拉取订阅",
+		"大小", totalSubSizeStr,
+	)
+
 	// 打印去重统计日志
 	slog.Info("节点解析",
 		"合计", rawCount,
