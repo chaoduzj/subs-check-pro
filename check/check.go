@@ -517,9 +517,26 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 	// 重置预计剩余时间计算
 	ETASeconds.Store(0)
 
+	// 计算本次检测所有订阅文件的体积
+	var totalSubSize uint64
+	for _, stat := range proxyutils.SubStats {
+		totalSubSize += uint64(stat.Size)
+	}
+
+	totalSubSizeStr := utils.FormatTraffic(totalSubSize)
+
 	slog.Info(fmt.Sprintf("可用节点数量: %d", len(pc.results)))
-	CheckTrafficTotal = utils.FormatTraffic(TotalBytes.Load())
+
+	totalBytes := TotalBytes.Load()
+
+	CheckTrafficTotal = utils.FormatTraffic(totalBytes)
+
+	// 总流量 = 订阅文件大小 + 检测流量
+	totalTraffic := totalSubSize + totalBytes
+	totalTrafficStr := utils.FormatTraffic(totalTraffic)
+
 	slog.Info(fmt.Sprintf("检测消耗流量: %s", CheckTrafficTotal))
+
 	slog.Debug("流量", "UP", UP.Load(), "DOWN", DOWN.Load())
 
 	// 计算检测用时
@@ -531,6 +548,8 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 
 	// 1. 深度分析 (利用上一步的成功率进行排序，生成 analysis yaml)
 	pc.GenerateAnalysisReport()
+
+	slog.Info("消耗流量统计", "总计", totalTrafficStr, "订阅", totalSubSizeStr, "检测", CheckTrafficTotal)
 
 	// 2. 清理元数据 (删除 sub_url 等字段，防止污染最终配置)
 	pc.CleanupMetadata()
