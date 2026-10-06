@@ -9,13 +9,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
 	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -80,19 +78,7 @@ func NewLoonEngine(scriptSrc []byte, scriptTag string, store *LoonKVStore, logge
 		logger = slog.Default()
 	}
 
-	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second, Resolver: &net.Resolver{PreferGo: true}}
-	transport := &http.Transport{
-		Proxy: nil,
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			if network == "tcp" || network == "tcp6" {
-				network = "tcp4"
-			}
-			return dialer.DialContext(ctx, network, addr)
-		},
-		MaxIdleConns: 100, MaxIdleConnsPerHost: 100, IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 10 * time.Second,
-	}
-
-	httpClient := &http.Client{Timeout: 30 * time.Second, Transport: transport}
+	httpClient := loonHTTPClient()
 
 	rt := quickjs.NewRuntime()
 	ctx := rt.NewContext()
@@ -160,8 +146,9 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 		defer runtime.UnlockOSThread()
 
 		rt := quickjs.NewRuntime()
-		rt.SetMemoryLimit(512 * 1024 * 1024)
-		rt.SetMaxStackSize(16 * 1024 * 1024)
+		memLimit, stackSize := jsRuntimeLimits()
+		rt.SetMemoryLimit(memLimit)
+		rt.SetMaxStackSize(stackSize)
 		defer rt.Close()
 
 		ctx := rt.NewContext()
@@ -252,10 +239,17 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 						if strings.Contains(cfg, "[推送内容]") {
 							finalURL := strings.Replace(cfg, "[推送标题]", url.PathEscape(t), 1)
 							finalURL = strings.Replace(finalURL, "[推送内容]", url.PathEscape(pushMsg), 1)
-							resp, err := http.Get(finalURL)
+							pushCtx, pushCancel := context.WithTimeout(context.Background(), 15*time.Second)
+							defer pushCancel()
+							pushReq, err := http.NewRequestWithContext(pushCtx, http.MethodGet, finalURL, nil)
 							if err == nil {
-								defer resp.Body.Close()
-							} else {
+								var resp *http.Response
+								if resp, err = e.httpClient.Do(pushReq); err == nil {
+									_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+									resp.Body.Close()
+								}
+							}
+							if err != nil {
 								e.logger.Warn("Sub-Store HTTP 推送失败", "err", err)
 							}
 							return
@@ -403,7 +397,8 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 						client = &clientCopy
 					}
 
-					httpResp, err := client.Do(httpReq)
+					canRetry := strings.EqualFold(method, "GET") && opts.Body == ""
+					httpResp, err := doWithRetry(reqCtx, client, httpReq, canRetry)
 					if timing != nil {
 						timing.total = time.Since(timing.start)
 					}
@@ -441,8 +436,9 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 					}
 				}
 				resBytes, _ := json.Marshal(res)
+				resLiteral, _ := json.Marshal(string(resBytes))
 				ctx.Schedule(func(inner *quickjs.Context) {
-					dispatchCode := fmt.Sprintf(`__dispatch_http_response("%s", %s);`, jsReqId, strconv.Quote(string(resBytes)))
+					dispatchCode := fmt.Sprintf(`__dispatch_http_response("%s", %s);`, jsReqId, resLiteral)
 					resVal := inner.Eval(dispatchCode)
 					resVal.Free()
 				})

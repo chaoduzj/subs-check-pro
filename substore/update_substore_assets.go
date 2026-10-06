@@ -90,6 +90,8 @@ type subStoreUpdater struct {
 func newSubStoreUpdater() *subStoreUpdater {
 	directTransport := http.DefaultTransport.(*http.Transport).Clone()
 	directTransport.Proxy = nil
+	directTransport.DialContext = dialContext
+	directTransport.ResponseHeaderTimeout = 20 * time.Second
 
 	proxyTransport := directTransport.Clone()
 	useSysProxy := utils.GetSysProxy()
@@ -105,8 +107,8 @@ func newSubStoreUpdater() *subStoreUpdater {
 	}
 
 	return &subStoreUpdater{
-		proxyClient:  &http.Client{Transport: proxyTransport, Timeout: 30 * time.Second},
-		directClient: &http.Client{Transport: directTransport, Timeout: 30 * time.Second},
+		proxyClient:  &http.Client{Transport: proxyTransport, Timeout: 3 * time.Minute},
+		directClient: &http.Client{Transport: directTransport, Timeout: 3 * time.Minute},
 		useSysProxy:  useSysProxy,
 	}
 }
@@ -359,7 +361,12 @@ func (u *subStoreUpdater) extractRemoteZipToPath(rawURL string, targetDir string
 	}
 	defer resp.Body.Close()
 
-	tmpFile, err := os.CreateTemp("", "substore-front-*.zip")
+	// Android 的 os.TempDir() 应用无写权限，临时文件放在应用自己的数据目录
+	parentDir := filepath.Dir(targetDir)
+	if err := os.MkdirAll(parentDir, 0o755); err != nil {
+		return fmt.Errorf("创建前端上级目录失败: %w", err)
+	}
+	tmpFile, err := os.CreateTemp(parentDir, "substore-front-*.zip")
 	if err != nil {
 		return err
 	}
@@ -372,35 +379,78 @@ func (u *subStoreUpdater) extractRemoteZipToPath(rawURL string, targetDir string
 		return fmt.Errorf("下载 ZIP 失败: %w", err)
 	}
 
-	zipReader, err := zip.OpenReader(tmpName)
+	return installFrontendZip(tmpName, targetDir)
+}
+
+// installFrontendZip 把前端 zip（内含 dist/ 目录）安装到 targetDir。
+// 拆成独立函数以便脱离网络做单元测试。
+func installFrontendZip(zipPath, targetDir string) error {
+	zipReader, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return fmt.Errorf("解析 ZIP 失败: %w", err)
 	}
 	defer zipReader.Close()
 
-	_ = os.RemoveAll(targetDir)
-	cleanTargetDir := filepath.Clean(targetDir) + string(os.PathSeparator)
+	// 先解压到暂存目录，成功后再整体替换，失败不影响现有前端
+	stageDir := targetDir + ".new"
+	oldDir := targetDir + ".old"
+	_ = os.RemoveAll(stageDir)
+	_ = os.RemoveAll(oldDir)
+	defer os.RemoveAll(stageDir) // 成功时 stageDir 已被改名，这里是 no-op；失败时负责清理
 
+	cleanStageDir := filepath.Clean(stageDir) + string(os.PathSeparator)
+	extracted := 0
 	for _, f := range zipReader.File {
 		if !strings.HasPrefix(f.Name, "dist/") || strings.TrimPrefix(f.Name, "dist/") == "" {
 			continue
 		}
 
-		targetPath := filepath.Join(targetDir, filepath.FromSlash(strings.TrimPrefix(f.Name, "dist/")))
-		if !strings.HasPrefix(targetPath, cleanTargetDir) {
+		targetPath := filepath.Join(stageDir, filepath.FromSlash(strings.TrimPrefix(f.Name, "dist/")))
+		if !strings.HasPrefix(targetPath, cleanStageDir) {
 			return fmt.Errorf("非法的文件路径穿越: %s", targetPath)
 		}
 
 		if f.FileInfo().IsDir() {
-			_ = os.MkdirAll(targetPath, 0755)
+			_ = os.MkdirAll(targetPath, 0o755)
 			continue
 		}
 
-		_ = os.MkdirAll(filepath.Dir(targetPath), 0755)
+		_ = os.MkdirAll(filepath.Dir(targetPath), 0o755)
 		if err := extractZipFile(f, targetPath); err != nil {
 			return err
 		}
+		extracted++
 	}
+	if extracted == 0 {
+		return fmt.Errorf("ZIP 中没有找到 dist/ 目录下的前端文件，已保留现有前端")
+	}
+
+	// scp/ 是本程序自带的图标资源，不在前端 zip 里，需带到新目录
+	scpOld, scpNew := filepath.Join(targetDir, "scp"), filepath.Join(stageDir, "scp")
+	scpMoved := false
+	if _, err := os.Stat(scpOld); err == nil {
+		if _, err := os.Stat(scpNew); os.IsNotExist(err) {
+			scpMoved = os.Rename(scpOld, scpNew) == nil
+		}
+	}
+	restoreScp := func() {
+		if scpMoved {
+			_ = os.Rename(scpNew, scpOld)
+		}
+	}
+
+	if _, err := os.Stat(targetDir); err == nil {
+		if err := os.Rename(targetDir, oldDir); err != nil {
+			restoreScp()
+			return fmt.Errorf("备份旧前端目录失败: %w", err)
+		}
+	}
+	if err := os.Rename(stageDir, targetDir); err != nil {
+		_ = os.Rename(oldDir, targetDir) // 回滚旧前端
+		restoreScp()
+		return fmt.Errorf("切换到新前端目录失败: %w", err)
+	}
+	_ = os.RemoveAll(oldDir)
 	return nil
 }
 

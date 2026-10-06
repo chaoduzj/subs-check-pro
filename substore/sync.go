@@ -651,7 +651,8 @@ func newSingboxFile(name, jsURL, jsonURL string) file {
 
 // fetchProcess 获取指定资源的现有 process 列表（保留原始 JSON 用于差量合并）
 func fetchProcess(endpoint, name string) ([]json.RawMessage, error) {
-	resp, err := http.Get(utils.JoinURL(BaseURL, "api", endpoint, name))
+	// 使用带超时的本机客户端，避免 JS 引擎卡住时调用方永久挂起
+	resp, err := localAPIClient.Get(utils.JoinURL(BaseURL, "api", endpoint, name))
 
 	if err != nil {
 		return nil, err
@@ -682,7 +683,7 @@ func createResource(endpoint string, data any, name string) error {
 	if err != nil {
 		return err
 	}
-	resp, err := http.Post(
+	resp, err := localAPIClient.Post(
 		fmt.Sprintf("%s/api/%ss", BaseURL, endpoint),
 		"application/json",
 		bytes.NewBuffer(jsonData),
@@ -712,7 +713,7 @@ func syncResource(endpoint string, data any, name string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := localAPIClient.Do(req)
 	if err != nil {
 		return err
 	}
