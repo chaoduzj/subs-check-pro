@@ -25,6 +25,8 @@ type migrateConfigView struct {
 
 	SingboxOld singBoxConfigUnified `yaml:"singbox-old"`
 
+	KeepSuccessProxies *bool `yaml:"keep-success-proxies"`
+
 	SubProcess struct {
 		ResolveDomain any `yaml:"resolve-domain"`
 	} `yaml:"sub-process"`
@@ -55,6 +57,18 @@ func (app *App) migrateConfig() error {
 
 	var view migrateConfigView
 	_ = yaml.Unmarshal(data, &view)
+
+	// keep-success-proxies -> load-last-result
+	if view.KeepSuccessProxies != nil {
+		content = rewriteKeepSuccessProxies(
+			content,
+			*view.KeepSuccessProxies,
+		)
+
+		needWrite = true
+		migrated = append(migrated, "keep-success-proxies")
+		slog.Debug("keep-success-proxies 已迁移到新配置结构")
+	}
 
 	// 自动升级 singbox-latest 到 1.14（支持 v1/v2）
 	if view.SingboxLatest.Version != "" {
@@ -436,6 +450,62 @@ func rewriteCronExpression(content, newCron string) string {
 			// YAML 中含有通配符(如 *)的字符串建议加双引号避免被识别为 Alias 抛错
 			lines[i] = keyIndent + "cron-expression: \"" + newCron + "\""
 			return strings.Join(lines, "\n")
+		}
+	}
+
+	return content
+}
+
+// rewriteKeepSuccessProxies 迁移旧配置
+//
+// keep-success-proxies: true
+//
+// ->
+//
+// load-last-result: true
+// load-history-result: false
+// save-history-result: false
+func rewriteKeepSuccessProxies(content string, oldValue bool) string {
+	lines := strings.Split(content, "\n")
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmed, "keep-success-proxies:") {
+			start := i
+
+			// 回溯删除紧邻的注释
+			for start > 0 {
+				prev := strings.TrimSpace(lines[start-1])
+
+				if strings.HasPrefix(prev, "#") || prev == "" {
+					start--
+					continue
+				}
+
+				break
+			}
+
+			indent := len(line) - len(strings.TrimLeft(line, " \t"))
+			keyIndent := strings.Repeat(" ", indent)
+
+			newBlock := []string{
+				"",
+				keyIndent + "# 是否加载上次检测结果(all.yaml)",
+				keyIndent + "load-last-result: " + strconv.FormatBool(oldValue),
+				"",
+				keyIndent + "# 是否加载历史检测结果(history.yaml)",
+				keyIndent + "load-history-result: false",
+				"",
+				keyIndent + "# 是否保存历史检测结果(history.yaml)",
+				keyIndent + "save-history-result: false",
+			}
+
+			out := append([]string{}, lines[:start]...)
+			out = append(out, newBlock...)
+			out = append(out, lines[i+1:]...)
+
+			return strings.Join(out, "\n")
 		}
 	}
 

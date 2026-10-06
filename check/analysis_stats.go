@@ -790,12 +790,25 @@ func cmpFloat(a, b float64) int {
 	return 0
 }
 
-// CleanupMetadata 清理元数据
+// CleanupMetadata 清理元数据，并为输出结果进行 map 隔离复制
 func (pc *ProxyChecker) CleanupMetadata() {
-	for _, result := range pc.results {
+	for i, result := range pc.results {
 		if result.Proxy != nil {
-			delete(result.Proxy, "sub_url")
-			delete(result.Proxy, "sub_tag")
+			// 1. 创建一个新的干净 Map (浅拷贝)
+			cleanProxy := make(map[string]any, len(result.Proxy))
+
+			// 2. 将除了需要清理的元数据之外的字段复制到新 Map
+			for k, v := range result.Proxy {
+				if k == "sub_url" || k == "sub_tag" || k == "history_score" {
+					continue
+				}
+				cleanProxy[k] = v
+			}
+
+			// 3. 将新 Map 替换回 results 数组中
+			// 这样 all.yaml 会用这个干净的 Map
+			// 而 history.yaml 依然保留着最初拥有 sub_url 和 history_score 的完整 Map
+			pc.results[i].Proxy = cleanProxy
 		}
 	}
 }

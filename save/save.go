@@ -58,24 +58,36 @@ var localClient = &http.Client{
 }
 
 // NewConfigSaver 创建新的配置保存器，支持显式指定保存方法
-func NewConfigSaver(results []check.Result, saveMethodName string) *ConfigSaver {
+func NewConfigSaver(results []check.Result, historyNodes []map[string]any, saveMethodName string) *ConfigSaver {
+	categories := []ProxyCategory{
+		{Name: "all.yaml", Proxies: nil, Filter: func(r check.Result) bool { return true }},
+		{Name: "mihomo.yaml", Proxies: nil, Filter: func(r check.Result) bool { return true }},
+		{Name: "base64.txt", Proxies: nil, Filter: func(r check.Result) bool { return true }},
+	}
+
+	// 只有在配置开启了保存历史记录时，才将 history.yaml 加入保存队列
+	// 直接使用传入的 historyNodes，因为这批节点已经在 check 阶段完成了加减分、去重和排序
+	if config.GlobalConfig.SaveHistoryResult || config.GlobalConfig.LoadHistoryResult {
+		categories = append(categories, ProxyCategory{
+			Name:    "history.yaml",
+			Proxies: historyNodes,
+			// Filter 设为 false，防止其从本次检测的 results 结果中二次重复抓取
+			Filter: func(r check.Result) bool { return false },
+		})
+	}
+
 	return &ConfigSaver{
 		methodName: saveMethodName,
 		results:    results,
 		saveMethod: getSaverFunc(saveMethodName),
-		categories: []ProxyCategory{
-			{Name: "all.yaml", Proxies: nil, Filter: func(r check.Result) bool { return true }},
-			{Name: "mihomo.yaml", Proxies: nil, Filter: func(r check.Result) bool { return true }},
-			{Name: "base64.txt", Proxies: nil, Filter: func(r check.Result) bool { return true }},
-			{Name: "history.yaml", Proxies: nil, Filter: func(r check.Result) bool { return true }},
-		},
+		categories: categories,
 	}
 }
 
 // SaveConfig 保存配置的入口函数
-func SaveConfig(results []check.Result) {
+func SaveConfig(results []check.Result, historyNodes []map[string]any) {
 	// 1. 始终先保存到本地一份
-	localSaver := NewConfigSaver(results, "local")
+	localSaver := NewConfigSaver(results, historyNodes, "local")
 	if err := localSaver.Save(); err != nil {
 		slog.Error("保存本地配置失败", "err", err)
 	}
@@ -83,7 +95,7 @@ func SaveConfig(results []check.Result) {
 	// 2. 如果配置了其他远程保存方式，则执行远程保存
 	remoteMethod := config.GlobalConfig.SaveMethod
 	if remoteMethod != "" && remoteMethod != "local" {
-		remoteSaver := NewConfigSaver(results, remoteMethod)
+		remoteSaver := NewConfigSaver(results, historyNodes, remoteMethod)
 		if err := remoteSaver.Save(); err != nil {
 			slog.Error("保存远程配置失败", "method", remoteMethod, "err", err)
 		}
@@ -134,7 +146,8 @@ func (cs *ConfigSaver) categorizeProxies() {
 func (cs *ConfigSaver) generateContent(category ProxyCategory) ([]byte, error) {
 	switch category.Name {
 	case "history.yaml":
-		return cs.generateHistory(category.Proxies)
+		dedupedProxies := deduplicateByProxyKey(category.Proxies)
+		return yaml.Marshal(map[string]any{"proxies": dedupedProxies})
 	case "all.yaml":
 		return cs.generateAllYaml(category.Proxies)
 	case "mihomo.yaml":
@@ -144,26 +157,6 @@ func (cs *ConfigSaver) generateContent(category ProxyCategory) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("未知的文件类型: %s", category.Name)
 	}
-}
-
-func (cs *ConfigSaver) generateHistory(newProxies []map[string]any) ([]byte, error) {
-	localSubDir, err := getLocalSubDir()
-	if err != nil {
-		return nil, fmt.Errorf("无法获取本地存储路径: %w", err)
-	}
-
-	var existing []map[string]any
-	filePath := filepath.Join(localSubDir, "history.yaml")
-
-	if data, err := ReadFileIfExists(filePath); err == nil && len(data) > 0 {
-		var parsed map[string][]map[string]any
-		if err := yaml.Unmarshal(data, &parsed); err == nil {
-			existing = parsed["proxies"]
-		}
-	}
-
-	merged := mergeUniqueProxies(existing, newProxies)
-	return yaml.Marshal(map[string]any{"proxies": merged})
 }
 
 func (cs *ConfigSaver) generateAllYaml(proxies []map[string]any) ([]byte, error) {
@@ -233,7 +226,7 @@ func (cs *ConfigSaver) generateBase64() ([]byte, error) {
 	return body, nil
 }
 
-// 为辅助与配置
+// ---------------- 以下为辅助函数部分 ----------------
 
 // getSaverFunc 根据配置选择保存方法
 func getSaverFunc(methodName string) func([]byte, string) error {
@@ -271,38 +264,6 @@ func getSaverFunc(methodName string) func([]byte, string) error {
 		saver.OutputPath = filepath.Join(saver.OutputPath, "sub")
 		return saver.Save
 	}
-}
-
-// getLocalSubDir 获取本地 sub 文件夹的绝对路径（供 history 等读取使用）
-func getLocalSubDir() (string, error) {
-	saver, err := method.NewLocalSaver()
-	if err != nil {
-		return "", err
-	}
-	outPath := filepath.Join(saver.OutputPath, "sub")
-	if !filepath.IsAbs(outPath) {
-		outPath = filepath.Join(saver.BasePath, outPath)
-	}
-	return outPath, nil
-}
-
-// mergeUniqueProxies 使用可变参数重构，支持合并多个代理列表并去重
-func mergeUniqueProxies(proxyLists ...[]map[string]any) []map[string]any {
-	seen := make(map[string]bool)
-	var result []map[string]any
-
-	for _, list := range proxyLists {
-		for _, p := range list {
-			delete(p, "sub_was_succeed")
-			delete(p, "sub_from_history")
-			key := utils.GenerateProxyKey(p)
-			if !seen[key] {
-				seen[key] = true
-				result = append(result, p)
-			}
-		}
-	}
-	return result
 }
 
 func ReadFileIfExists(path string) ([]byte, error) {
@@ -446,4 +407,25 @@ func fetchAny(proxyPrefixURL, directURL string) ([]byte, error) {
 		return data, nil
 	}
 	return nil, fmt.Errorf("所有策略均不可达: %s", directURL)
+}
+
+// deduplicateByProxyKey 通过物理连结参数精准去重
+// 由于传入的 proxies 已经按 history_score 降序排列，
+// 这个去重过程会天然保留相同物理节点中分数最高的那一个
+func deduplicateByProxyKey(proxies []map[string]any) []map[string]any {
+	seen := make(map[string]bool)
+	var result []map[string]any
+
+	for _, p := range proxies {
+		// 兜底清理可能残留的旧标签
+		delete(p, "sub_was_succeed")
+		delete(p, "sub_from_history")
+
+		key := utils.GenerateProxyKey(p)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, p)
+		}
+	}
+	return result
 }

@@ -54,12 +54,14 @@ concurrent: 10
 # success-limit <= success <= success-limit+concurrent
 success-limit: 100
 
-# 此选项将保存并加载 {上次检测成功的节点} 和 {历次检测成功的节点}
-# 如果为true，则保留之前测试成功的节点
-# 避免因为上游链接更新，导致可用节点丢失
-# 本项目已移除未经验证的 /all.yaml /sub/all.yaml访问
-# 可放心设置CF Tunnel隧道,在外网访问、修改配置、分享订阅
-keep-success-proxies: true
+# 是否加载上次检测结果(all.yaml)
+load-last-result: false
+
+# 是否加载历史检测结果(history.yaml)
+load-history-result: false
+
+# 是否保存历史检测结果(history.yaml)
+save-history-result: false
 
 # -----------下载参数-----------
 # 注意: 节点可能被测速测死(暂时或永久), 经过多次测试, 不用怀疑!

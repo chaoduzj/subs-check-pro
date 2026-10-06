@@ -393,7 +393,7 @@ func (app *App) checkProxies() error {
 	check.StartProgress()
 	defer check.StopProgress()
 
-	results, err := check.Check()
+	results, historyNodes, err := check.Check()
 	if err != nil {
 		return fmt.Errorf("检测代理失败: %w", err)
 	}
@@ -401,7 +401,7 @@ func (app *App) checkProxies() error {
 	slog.Info("检测完成")
 
 	check.CurrentStepName.Store("保存配置")
-	save.SaveConfig(results)
+	save.SaveConfig(results, historyNodes)
 
 	check.CurrentStepName.Store("更新订阅")
 	utils.UpdateSubs()

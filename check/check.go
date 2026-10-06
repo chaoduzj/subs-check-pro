@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"regexp"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -104,6 +105,11 @@ type ProxyChecker struct {
 	mediaChan chan *ProxyJob
 
 	pt *ProgressTracker
+
+	// 用于回收失败但还有分数的历史节点、以及本次成功的节点
+	historyChan chan map[string]any
+	HistoryPool []map[string]any
+	historyWg   sync.WaitGroup
 }
 
 // ProxyJob 在测活-测速-流媒体检测任务间传输信息
@@ -230,11 +236,14 @@ func NewProxyChecker(proxyCount int) *ProxyChecker {
 
 		// 设置进度跟踪
 		pt: NewProgressTracker(proxyCount),
+
+		historyChan: make(chan map[string]any, proxyCount), // 缓冲设为最大值防止阻塞
+		HistoryPool: make([]map[string]any, 0),
 	}
 }
 
 // Check 执行代理检测的主函数
-func Check() ([]Result, error) {
+func Check() ([]Result, []map[string]any, error) {
 	proxyutils.ResetRenameCounter()
 	ForceClose.Store(false)
 	Successlimited.Store(false)
@@ -257,14 +266,14 @@ func Check() ([]Result, error) {
 	Fetching.Store(true)
 	CurrentStepName.Store("解析远程列表")
 	// 获取订阅节点和之前成功的节点数量(已前置)
-	proxies, rawCount, subWasSuccedLength, historyLength, err := proxyutils.GetProxies(func(stepName string, done, total, available int) {
+	proxies, rawCount, lastResultLength, historyResultLength, err := proxyutils.GetProxies(func(stepName string, done, total, available int) {
 		CurrentStepName.Store(stepName)
 		Progress.Store(uint32(done))
 		ProxyCount.Store(uint32(total))
 		Available.Store(uint32(available))
 	})
 	if err != nil {
-		return nil, fmt.Errorf("获取节点失败: %w", err)
+		return nil, nil, fmt.Errorf("获取节点失败: %w", err)
 	}
 	slog.Info("已获取节点", "数量", rawCount)
 	slog.Info("去重后节点", "数量", len(proxies))
@@ -277,12 +286,12 @@ func Check() ([]Result, error) {
 	Progress.Store(0)
 	ProxyCount.Store(0)
 
-	if subWasSuccedLength > 0 {
-		slog.Info("已加载上次检测可用节点", "数量", subWasSuccedLength)
+	if lastResultLength > 0 {
+		slog.Info("已加载上次检测可用节点", "数量", lastResultLength)
 	}
 
-	if historyLength > 0 {
-		slog.Info("已加载历次检测可用节点", "数量", historyLength)
+	if historyResultLength > 0 {
+		slog.Info("已加载历次检测可用节点", "数量", historyResultLength)
 	}
 
 	CurrentStepName.Store("节点乱序")
@@ -302,9 +311,9 @@ func Check() ([]Result, error) {
 	cidr, domainLevel := proxyutils.ThresholdToLevel(cfg.Threshold)
 
 	headSize := 0
-	if subWasSuccedLength < 10 {
+	if lastResultLength < 10 {
 		// 设置之前成功的节点顺序在前
-		headSize = subWasSuccedLength
+		headSize = lastResultLength
 	}
 
 	if len(proxies) > headSize && headSize > 0 {
@@ -322,7 +331,7 @@ func Check() ([]Result, error) {
 	CurrentStepName.Store("获取订阅完成")
 	if len(proxies) == 0 {
 		slog.Info("没有需要检测的节点")
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// 标记订阅获取阶段结束
@@ -331,13 +340,13 @@ func Check() ([]Result, error) {
 
 	checker := NewProxyChecker(len(proxies))
 
-	results, err := checker.run(proxies)
+	results, historyPool, err := checker.run(proxies)
 	checker = nil //nolint:ineffassign
-	return results, err
+	return results, historyPool, err
 }
 
 // Run 运行检测流程
-func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
+func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, []map[string]any, error) {
 	CurrentStepName.Store("初始化检测")
 	// 限速设置
 	limit := config.GlobalConfig.TotalSpeedLimit
@@ -424,8 +433,12 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 		)
 	}
 
-	if config.GlobalConfig.KeepSuccessProxies {
-		args = append(args, "keep-success-proxies", config.GlobalConfig.KeepSuccessProxies)
+	if config.GlobalConfig.LoadLastResult {
+		args = append(args, "load-last-result", true)
+	}
+
+	if config.GlobalConfig.LoadHistoryResult {
+		args = append(args, "load-history-result", true)
 	}
 
 	args = append(args, "analysis", "true")
@@ -497,11 +510,30 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 
 	CurrentStepName.Store("进度")
 
+	pc.historyWg.Add(1)
+	go func() {
+		defer pc.historyWg.Done()
+		for node := range pc.historyChan {
+			pc.HistoryPool = append(pc.HistoryPool, node)
+		}
+	}()
+
 	// 启动流水线阶段
 	go pc.distributeJobs(proxies, ctx)
 	go pc.runAliveStage(ctx, geoDB)
 	go pc.runSpeedStage(ctx, cancel)
 	pc.runMediaStageAndCollect(geoDB, ctx, cancel)
+
+	// 关闭历史节点收集并按分数排序
+	close(pc.historyChan)
+	pc.historyWg.Wait()
+
+	sort.Slice(pc.HistoryPool, func(i, j int) bool {
+		scoreI, _ := pc.HistoryPool[i]["history_score"].(int)
+		scoreJ, _ := pc.HistoryPool[j]["history_score"].(int)
+		return scoreI > scoreJ // 降序，最高分的排在前面
+	})
+
 	CurrentStepName.Store("处理结果")
 
 	// 确保进度显示到 100%
@@ -569,7 +601,7 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 	// 标记结束
 	Checking.Store(false)
 
-	return pc.results, nil
+	return pc.results, pc.HistoryPool, nil
 }
 
 // distributeJobs 分发代理任务
@@ -600,7 +632,10 @@ func (pc *ProxyChecker) distributeJobs(proxies []map[string]any, ctx context.Con
 				}
 
 				if checkCtxDone(ctx) {
-					return
+					// 收到终止信号，将当前队列未处理的历史节点无伤抢救下来
+					pc.scoreAndRecycle(proxies[index], "untested", 0, nil)
+					proxies[index] = nil
+					continue // 这里用 continue 继续消耗数组完成抢救
 				}
 
 				mapping := proxies[index]
@@ -623,6 +658,8 @@ func (pc *ProxyChecker) distributeJobs(proxies []map[string]any, ctx context.Con
 				if cli == nil {
 					// 创建失败：视为 alive 完成（失败），不进入 speed/media
 					pc.pt.CountAlive(false)
+					// 底层生成故障视为死节点
+					pc.scoreAndRecycle(mapping, "alive_fail", 0, nil)
 					continue
 				}
 
@@ -671,6 +708,7 @@ func (pc *ProxyChecker) runAliveStage(ctx context.Context, db *maxminddb.Reader)
 					if job.aliveMarked.CompareAndSwap(false, true) {
 						pc.pt.CountAlive(false)
 					}
+					pc.scoreAndRecycle(job.Result.Proxy, "untested", 0, nil) // 抢救
 					job.Close()
 					continue
 				}
@@ -682,6 +720,7 @@ func (pc *ProxyChecker) runAliveStage(ctx context.Context, db *maxminddb.Reader)
 					if job.aliveMarked.CompareAndSwap(false, true) {
 						pc.pt.CountAlive(false)
 					}
+					pc.scoreAndRecycle(job.Result.Proxy, "alive_fail", 0, nil) // 失败打分扣除
 					job.Close()
 					continue // 不进入 speed/media
 				}
@@ -690,17 +729,19 @@ func (pc *ProxyChecker) runAliveStage(ctx context.Context, db *maxminddb.Reader)
 				if job.NeedCF {
 					job.IsCfAccessible, job.CfLoc, job.CfIP = platform.CheckCloudflare(job.Client.Client)
 					if config.GlobalConfig.DropBadCfNodes && !job.IsCfAccessible {
-						job.Close()
 						// 记录丢弃
 						if job.aliveMarked.CompareAndSwap(false, true) {
 							pc.pt.CountAlive(false)
 						}
+						pc.scoreAndRecycle(job.Result.Proxy, "alive_fail", 0, nil) // 视为故障
+						job.Close()
 						continue
 					}
 				}
 
 				// 地区过滤
 				if !job.checkJobLocation(db, ctx) {
+					pc.scoreAndRecycle(job.Result.Proxy, "untested", 0, nil) // 未通过地区过滤，算作无伤丢弃，保留原分数
 					job.Close()
 					continue
 				}
@@ -758,6 +799,7 @@ func (pc *ProxyChecker) runSpeedStage(ctx context.Context, cancel context.Cancel
 					if job.speedMarked.CompareAndSwap(false, true) {
 						pc.pt.CountSpeed(false)
 					}
+					pc.scoreAndRecycle(job.Result.Proxy, "untested", 0, nil) // 抢救
 					job.Close()
 					continue
 				}
@@ -772,6 +814,7 @@ func (pc *ProxyChecker) runSpeedStage(ctx context.Context, cancel context.Cancel
 					}
 				}
 				if !success {
+					pc.scoreAndRecycle(job.Result.Proxy, "speed_fail", 0, nil) // 失败打分扣除
 					job.Close()
 					continue
 				}
@@ -849,6 +892,7 @@ func (pc *ProxyChecker) runMediaStageAndCollect(db *maxminddb.Reader, ctx contex
 						if job.mediaMarked.CompareAndSwap(false, true) {
 							pc.pt.CountMedia()
 						}
+						pc.scoreAndRecycle(job.Result.Proxy, "untested", 0, nil) // 抢救
 						job.Close()
 						continue
 					}
@@ -881,6 +925,9 @@ func (pc *ProxyChecker) runMediaStageAndCollect(db *maxminddb.Reader, ctx contex
 
 				// 记录节点下载速度
 				job.Result.Speed = job.Speed
+
+				// 成功节点打分并入池
+				pc.scoreAndRecycle(job.Result.Proxy, "success", job.Speed, &job.Result)
 
 				// 将结果发送到 collector
 				pc.resultChan <- job.Result
@@ -1544,4 +1591,61 @@ func containsLocation(filterLocs []string, country string) bool {
 	return lo.ContainsBy(filterLocs, func(loc string) bool {
 		return strings.EqualFold(loc, country)
 	})
+}
+
+// scoreAndRecycle 计算节点健康度分数。若分数 > 0，回收至 historyChan 以便后续统一排序保存。
+func (pc *ProxyChecker) scoreAndRecycle(proxy map[string]any, state string, speed int, result *Result) {
+	// 识别是否是历史节点或刚成功的节点
+	tag, _ := proxy["sub_tag"].(string)
+	urlStr, _ := proxy["sub_url"].(string)
+	isHistory := tag == "#History" || tag == "#Succeed" || strings.Contains(urlStr, "/history.yaml") || strings.Contains(urlStr, "/all.yaml")
+
+	// 如果是全新抓取来的节点，且本次检测失败，直接无视不记录入历史
+	if !isHistory && state != "success" {
+		return
+	}
+
+	// 提取当前分数，首次打分赋予初始值 10
+	score := 10
+	if scoreRaw, exists := proxy["history_score"]; exists {
+		switch v := scoreRaw.(type) {
+		case int:
+			score = v
+		case float64:
+			score = int(v) // yaml 反序列化后数值可能是 float64
+		}
+	}
+
+	// 动态调整分值
+	switch state {
+	case "alive_fail":
+		score -= 2 // 连通性彻底断开，重罚 (-2)
+	case "speed_fail":
+		score -= 1 // 速度不达标，轻罚 (-1)
+	case "success":
+		score += 1 // 存活奖励 (+1)
+		// 速度奖励附加
+		if speed > 50*1024*1024 { // > 50MB/s 额外 +2
+			score += 2
+		} else if speed > 20*1024*1024 { // > 20MB/s 额外 +1
+			score += 1
+		}
+		// 流媒体与AI高质量奖励附加
+		if result != nil && (result.Openai || result.OpenaiWeb || result.Netflix || result.Disney || result.Gemini.Region != "") {
+			score += 1
+		}
+	case "untested":
+		// 未测试(例如达到上限提前终止或被地区强行过滤)，不增不减，保留原分数
+	}
+
+	// 锁定最高分限制
+	if score > 20 {
+		score = 20
+	}
+
+	// 如果扣除后大于 0 就能留在历史库中
+	if score > 0 {
+		proxy["history_score"] = score
+		pc.historyChan <- proxy
+	}
 }

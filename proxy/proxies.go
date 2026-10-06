@@ -548,27 +548,41 @@ func resolveSubUrls(progressCallback func(stepName string, done, total, availabl
 	}
 
 	requiredListenPort := strings.TrimSpace(strings.TrimPrefix(config.GlobalConfig.ListenPort, ":"))
-	localLastSucced := "http://127.0.0.1:" + requiredListenPort + "/all.yaml"
-	localHistory := "http://127.0.0.1:" + requiredListenPort + "/history.yaml"
+	localLastResultURL := "http://127.0.0.1:" + requiredListenPort + "/all.yaml"
+	localHistoryResultURL := "http://127.0.0.1:" + requiredListenPort + "/history.yaml"
 
-	// 如果用户设置了保留成功节点，则把本地的 all.yaml 和 history.yaml 放到最前面
-	if config.GlobalConfig.KeepSuccessProxies {
+	if config.GlobalConfig.LoadLastResult ||
+		config.GlobalConfig.LoadHistoryResult {
+
 		saver, err := method.NewLocalSaver()
-		saver.OutputPath = filepath.Join(saver.OutputPath, "sub")
 		if err == nil {
-			if !filepath.IsAbs(saver.OutputPath) {
-				saver.OutputPath = filepath.Join(saver.BasePath, saver.OutputPath)
-			}
-			localLastSuccedFile := filepath.Join(saver.OutputPath, "all.yaml")
-			localHistoryFile := filepath.Join(saver.OutputPath, "history.yaml")
+			saver.OutputPath = filepath.Join(saver.OutputPath, "sub")
 
-			if _, err := os.Stat(localLastSuccedFile); err == nil {
-				historyNum++
-				urls = append([]string{localLastSucced + "#Succeed"}, urls...)
+			if !filepath.IsAbs(saver.OutputPath) {
+				saver.OutputPath = filepath.Join(
+					saver.BasePath,
+					saver.OutputPath,
+				)
 			}
-			if _, err := os.Stat(localHistoryFile); err == nil {
-				historyNum++
-				urls = append([]string{localHistory + "#History"}, urls...)
+
+			if config.GlobalConfig.LoadLastResult {
+				urls = appendLocalResult(
+					urls,
+					filepath.Join(saver.OutputPath, "all.yaml"),
+					localLastResultURL,
+					"LastResult",
+					&historyNum,
+				)
+			}
+
+			if config.GlobalConfig.LoadHistoryResult {
+				urls = appendLocalResult(
+					urls,
+					filepath.Join(saver.OutputPath, "history.yaml"),
+					localHistoryResultURL,
+					"History",
+					&historyNum,
+				)
 			}
 		}
 	}
@@ -587,10 +601,16 @@ func resolveSubUrls(progressCallback func(stepName string, done, total, availabl
 			d.Fragment = ""
 			key = d.String()
 
-			// 如果不保留成功节点，过滤掉本地 all.yaml 和 history.yaml
-			if !config.GlobalConfig.KeepSuccessProxies &&
-				(key == localLastSucced || key == localHistory) {
-				continue
+			switch key {
+			case localLastResultURL:
+				if !config.GlobalConfig.LoadLastResult {
+					continue
+				}
+
+			case localHistoryResultURL:
+				if !config.GlobalConfig.LoadHistoryResult {
+					continue
+				}
 			}
 		}
 
@@ -601,6 +621,22 @@ func resolveSubUrls(progressCallback func(stepName string, done, total, availabl
 		out = append(out, s)
 	}
 	return out, localNum, remoteNum, historyNum
+}
+
+func appendLocalResult(
+	urls []string,
+	filePath string,
+	sourceURL string,
+	tag string,
+	historyNum *int,
+) []string {
+	if _, err := os.Stat(filePath); err == nil {
+		*historyNum++
+		urls = append([]string{
+			sourceURL + "#" + tag,
+		}, urls...)
+	}
+	return urls
 }
 
 // fetchRemoteSubUrls 从远程地址读取订阅URL清单
