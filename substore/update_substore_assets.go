@@ -214,13 +214,14 @@ func UpdateSubStoreAssets() (*SubStoreUpdateResult, error) {
 
 	updater := newSubStoreUpdater()
 	result := &SubStoreUpdateResult{}
+	var errs []string
 
 	// 定义后端版本号文件路径，和 JS 处于同一目录
 	backendVerPath := filepath.Join(filepath.Dir(paths.jsPath), "backend.version")
 	// 允许文件不存在，TrimSpace 用来容忍末尾隐藏换行符导致的版本解析错误
 	localBVerBytes, _ := os.ReadFile(backendVerPath)
 
-	result.UpdatedBackend, result.NewBackendVer = updater.updateComponent(
+	updBackend, newBVer, errB := updater.updateComponent(
 		"后端", "sub-store-org/Sub-Store", subStoreAssetName, strings.TrimSpace(string(localBVerBytes)),
 		func(dlURL, version string) error {
 			if err := updater.downloadFile(dlURL, paths.jsPath, "下载后端"); err != nil {
@@ -230,16 +231,23 @@ func UpdateSubStoreAssets() (*SubStoreUpdateResult, error) {
 			return os.WriteFile(backendVerPath, []byte(version), 0644)
 		},
 	)
+	if errB != nil {
+		errs = append(errs, errB.Error())
+	} else {
+		result.UpdatedBackend = updBackend
+		result.NewBackendVer = newBVer
+	}
 
 	// 更新完毕，触发后端热重载应用
 	if result.UpdatedBackend {
 		if err := ReloadSubStoreEngine(); err != nil {
 			slog.Error("Sub-Store 后端热重载失败，需重启进程后才能生效", "error", err)
+			errs = append(errs, fmt.Sprintf("后端热重载失败: %v", err))
 		}
 	}
 
 	localFVerBytes, _ := os.ReadFile(filepath.Join(paths.frontDir, "frontend.version"))
-	result.UpdatedFrontend, result.NewFrontendVer = updater.updateComponent(
+	updFront, newFVer, errF := updater.updateComponent(
 		"前端", "sub-store-org/Sub-Store-Front-End", "dist.zip", strings.TrimSpace(string(localFVerBytes)),
 		func(dlURL, version string) error {
 			if err := updater.extractRemoteZipToPath(dlURL, paths.frontDir, "下载前端"); err != nil {
@@ -248,31 +256,43 @@ func UpdateSubStoreAssets() (*SubStoreUpdateResult, error) {
 			return os.WriteFile(filepath.Join(paths.frontDir, "frontend.version"), []byte(version), 0644)
 		},
 	)
+	if errF != nil {
+		errs = append(errs, errF.Error())
+	} else {
+		result.UpdatedFrontend = updFront
+		result.NewFrontendVer = newFVer
+	}
+
+	if len(errs) > 0 {
+		return result, errors.New(strings.Join(errs, "；"))
+	}
 
 	return result, nil
 }
 
-func (u *subStoreUpdater) updateComponent(name, repo, assetName, localVerRaw string, downloadAction func(dlURL, tag string) error) (bool, string) {
+func (u *subStoreUpdater) updateComponent(name, repo, assetName, localVerRaw string, downloadAction func(dlURL, tag string) error) (bool, string, error) {
 	tag, dlURL, err := u.getLatestRelease(repo, assetName)
 	if err != nil {
-		slog.Error(fmt.Sprintf("获取 Sub-Store %s 版本失败", name), "error", err)
-		return false, ""
+		err = fmt.Errorf("获取 Sub-Store %s 版本失败: %w", name, err)
+		slog.Error(err.Error())
+		return false, "", err
 	}
 
 	localVer, remoteVer := parseVersion(localVerRaw), parseVersion(tag)
 	if remoteVer == nil || (localVer != nil && !remoteVer.GreaterThan(localVer)) {
-		return false, ""
+		return false, "", nil
 	}
 
 	slog.Info(fmt.Sprintf("Sub-Store %s 有新版", name), "local", localVer, "remote", tag)
 
 	if err := downloadAction(dlURL, tag); err != nil {
-		slog.Error(fmt.Sprintf("更新 Sub-Store %s 失败", name), "error", err)
-		return false, ""
+		err = fmt.Errorf("更新 Sub-Store %s 失败: %w", name, err)
+		slog.Error(err.Error())
+		return false, "", err
 	}
 
 	slog.Info(fmt.Sprintf("Sub-Store %s 已更新", name), "version", tag)
-	return true, tag
+	return true, tag, nil
 }
 
 func (u *subStoreUpdater) getLatestRelease(repo string, assetName string) (string, string, error) {

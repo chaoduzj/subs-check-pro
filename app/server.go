@@ -622,42 +622,49 @@ func (app *App) updateSubStoreHandler(c *gin.Context) {
 		result, err := substore.UpdateSubStoreAssets()
 
 		var finalMsg string
-		if err != nil {
-			slog.Error("更新 Sub-Store 失败", "error", err)
-			finalMsg = "更新 Sub-Store 失败: " + err.Error()
-		} else if result != nil && (result.UpdatedBackend || result.UpdatedFrontend) {
-			// 组装成功信息
+		if result != nil && (result.UpdatedBackend || result.UpdatedFrontend) {
+			// 有更新成功的部分
 			var parts []string
 			args := []any{}
 
 			if result.UpdatedFrontend {
 				parts = append(parts, "前端 "+result.NewFrontendVer)
-				args = append(args,
-					"前端", result.NewFrontendVer,
-				)
+				args = append(args, "前端", result.NewFrontendVer)
 			}
 			if result.UpdatedBackend {
 				parts = append(parts, "后端 "+result.NewBackendVer)
-				args = append(args,
-					"后端", result.NewBackendVer,
-				)
+				args = append(args, "后端", result.NewBackendVer)
 			}
-			finalMsg = "Sub-Store 更新成功: " + strings.Join(parts, ", ")
-			slog.Info("Sub-Store 更新成功", args...)
+
+			// 如果部分更新成功，但另一半失败了
+			if err != nil {
+				finalMsg = "Sub-Store 部分更新成功: " + strings.Join(parts, ", ") + "，但伴随错误: " + err.Error()
+				slog.Error("Sub-Store 部分更新成功，但有报错", "error", err)
+			} else {
+				finalMsg = "Sub-Store 更新成功: " + strings.Join(parts, ", ")
+				slog.Info("Sub-Store 更新成功", args...)
+			}
+		} else if err != nil {
+			// 没有任何更新成功，且存在报错
+			slog.Error("更新 Sub-Store 失败", "error", err)
+			finalMsg = "更新 Sub-Store 失败: " + err.Error()
 		} else {
 			finalMsg = "Sub-Store 已是最新版本，无需更新"
 			slog.Info("Sub-Store 已是最新版本，无需更新")
 		}
+
 		// 写入最终结果供前端轮询获取
 		subStoreUpdateMu.Lock()
 		subStoreUpdateMsg = finalMsg
 		subStoreUpdateMu.Unlock()
 
-		// 触发已聚合在 APP 层的通知系统
-		utils.SendNotifySubStoreAssets(
-			result.UpdatedFrontend, result.NewFrontendVer,
-			result.UpdatedBackend, result.NewBackendVer,
-		)
+		// 触发已聚合在 APP 层的通知系统 (增加判空防止 nil panic)
+		if result != nil {
+			utils.SendNotifySubStoreAssets(
+				result.UpdatedFrontend, result.NewFrontendVer,
+				result.UpdatedBackend, result.NewBackendVer,
+			)
+		}
 	}()
 
 	// 立即响应 200，前端轮询 /api/status 看到 subStoreUpdating = true 即可显示对应特效
