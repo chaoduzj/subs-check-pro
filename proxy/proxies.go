@@ -466,9 +466,7 @@ func GetProxies(progressCallback func(stepName string, done, total, available in
 
 	totalSubSizeStr := utils.FormatTraffic(totalSubSize)
 
-	slog.Info("拉取订阅",
-		"大小", totalSubSizeStr,
-	)
+	slog.Info("获取订阅", "总数", len(subUrls), "可用", int(validSubsCount.Load()), "大小", totalSubSizeStr)
 
 	// 打印去重统计日志
 	slog.Info("节点解析",
