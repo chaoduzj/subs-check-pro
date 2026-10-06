@@ -282,7 +282,7 @@ func GetProxies(progressCallback func(stepName string, done, total, available in
 	ClearCache()
 
 	if progressCallback != nil {
-		progressCallback("初始化代理环境", 0, 0, 0)
+		progressCallback("配置代理环境", 0, 0, 0)
 	}
 
 	// 初始化代理环境变量
@@ -422,7 +422,7 @@ func GetProxies(progressCallback func(stepName string, done, total, available in
 				validSubsCount.Add(1)
 			}
 			if progressCallback != nil {
-				progressCallback("解析订阅列表", int(fetchedCount.Add(1)), len(subUrls), int(validSubsCount.Load()))
+				progressCallback("获取订阅", int(fetchedCount.Add(1)), len(subUrls), int(validSubsCount.Load()))
 			}
 		}(subURL, tag, isSucced, isHistory)
 	}
@@ -498,9 +498,9 @@ func resolveSubUrls(progressCallback func(stepName string, done, total, availabl
 	urls = append(urls, config.GlobalConfig.SubUrls...)
 
 	if len(config.GlobalConfig.SubUrlsRemote) != 0 {
-		slog.Info("拉取远程订阅列表")
+		slog.Info("拉取远程订阅")
 		if progressCallback != nil {
-			progressCallback("拉取远程订阅列表", 0, len(config.GlobalConfig.SubUrlsRemote), 0)
+			progressCallback("拉取远程订阅", 0, len(config.GlobalConfig.SubUrlsRemote), 0)
 		}
 		var fetched int
 		var valid int
