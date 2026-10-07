@@ -85,6 +85,7 @@ type Config struct {
 	SubUrlsReTry         int     `yaml:"sub-urls-retry"`
 	SubUrlsRetryInterval int     `yaml:"sub-urls-retry-interval"`
 	SubUrlsTimeout       int     `yaml:"sub-urls-timeout"`
+	SubUrlMaxSizeMB      int     `yaml:"sub-url-max-size-mb"`
 
 	// SubsParseBatch 每批次发往去重队列的节点数
 	// 生产者攒够该数量后整批发送，消费者逐批接收处理。

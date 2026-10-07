@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/metacubex/mihomo/common/convert"
@@ -43,11 +44,12 @@ var (
 )
 
 const (
-	// maxSubscriptionBytes 单个订阅允许读取的最大字节数。
-	maxSubscriptionBytes = 50 << 20
+	warnLimitSize = 20 << 20
 
-	// maxPreallocBytes 按 Content-Length 预分配缓冲区的上限，
-	// 防止恶意/错误的超大 Content-Length 让我们白白申请一大块内存。
+	// 配置未初始化或无效时使用的安全默认值。
+	defaultMaxSubscriptionBytes = 50 << 20
+
+	// maxPreallocBytes 按 Content-Length 预分配缓冲区的上限
 	maxPreallocBytes = 32 << 20
 
 	// sniffBytes 读取响应体开头这么多字节，用于尽早识别“明显不是订阅”的二进制内容。
@@ -67,12 +69,28 @@ const (
 )
 
 var (
+	// maxSubscriptionBytes 单个订阅允许读取的最大字节数。
+	// maxSubscriptionBytes = 100 << 20
+	maxSubscriptionBytes atomic.Int64
+
 	// errNotText 响应体头部含 NUL 字节：二进制文件（图片/压缩包/可执行文件等），不可能是订阅。
-	errNotText = errors.New("响应内容为二进制数据，不是有效订阅")
+	errNotText           = errors.New("响应内容为二进制数据，不是有效订阅")
+	errEmptySubscription = errors.New("订阅响应内容为空")
 
 	// errTooLarge 订阅文件超过 maxSubscriptionBytes。
 	errTooLarge = errors.New("订阅文件过大")
 )
+
+func init() {
+	maxSubscriptionBytes.Store(defaultMaxSubscriptionBytes)
+}
+
+func currentMaxSubscriptionBytes() int64 {
+	if size := maxSubscriptionBytes.Load(); size > 0 {
+		return size
+	}
+	return defaultMaxSubscriptionBytes
+}
 
 // clientMap 用于缓存不同代理策略的 HTTP Client
 // key: "direct" 或 proxyUrl (e.g. "http://127.0.0.1:7890")
@@ -273,14 +291,28 @@ func (b *hostBreaker) clear() {
 	b.mu.Unlock()
 }
 
-
 // FetchSubsData 获取数据 (包含重试、占位符处理、代理策略)
 func FetchSubsData(rawURL string) ([]byte, error) {
-	// 清洗 URL
-	rawURL = parse.CleanURL(rawURL)
+	rawURL = strings.TrimSpace(parse.CleanURL(rawURL))
+	if rawURL == "" {
+		return nil, errors.New("订阅 URL 为空")
+	}
 
-	if _, err := url.Parse(rawURL); err != nil {
-		return nil, err
+	// 处理为标准的GitHub raw地址
+	rawURL = utils.NormalizeGitHubRawURL(rawURL)
+	rawURL = parse.EnsureScheme(rawURL)
+
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("解析订阅 URL 失败: %w", err)
+	}
+	if parsedURL.Hostname() == "" {
+		return nil, errors.New("订阅 URL 缺少主机名")
+	}
+	switch strings.ToLower(parsedURL.Scheme) {
+	case "http", "https":
+	default:
+		return nil, fmt.Errorf("不支持的订阅 URL 协议: %s", parsedURL.Scheme)
 	}
 
 	slog.Debug("正在下载订阅", "URL", rawURL)
@@ -289,11 +321,7 @@ func FetchSubsData(rawURL string) ([]byte, error) {
 	maxRetries := max(1, conf.SubUrlsReTry)
 	timeout := max(10, conf.SubUrlsTimeout)
 
-	// 处理为标准的GitHub raw地址
-	rawURL = utils.NormalizeGitHubRawURL(rawURL)
-
 	candidates, hasPlaceholder := buildCandidateURLs(rawURL)
-	var lastErr error
 
 	// 定义请求策略
 	type strategy struct {
@@ -301,24 +329,24 @@ func FetchSubsData(rawURL string) ([]byte, error) {
 		urlFunc  func(string) string
 	}
 
-	strategies := []strategy{}
-
 	warpFunc := func(s string) string { return utils.WarpURL(parse.EnsureScheme(s), true) }
-	originFunc := parse.EnsureScheme
+	originFunc := func(s string) string { return parse.EnsureScheme(s) }
 
+	strategies := make([]strategy, 0, 3)
 	if utils.IsLocalURL(rawURL) {
-		strategies = append(strategies, strategy{false, warpFunc})
+		strategies = append(strategies, strategy{useProxy: false, urlFunc: warpFunc})
 	} else {
-		// 1. 系统代理 (External utils)
-		if utils.IsSysProxyAvailable {
-			strategies = append(strategies, strategy{true, originFunc})
+		if utils.IsSysProxyAvailable && strings.TrimSpace(config.GlobalConfig.SystemProxy) != "" {
+			strategies = append(strategies, strategy{useProxy: true, urlFunc: originFunc})
 		}
-		// 2. Github 代理 (External utils)
 		if utils.IsGhProxyAvailable {
-			strategies = append(strategies, strategy{false, warpFunc})
+			strategies = append(strategies, strategy{useProxy: false, urlFunc: warpFunc})
 		}
-		// 3. 直连兜底
-		strategies = append(strategies, strategy{false, originFunc})
+		strategies = append(strategies, strategy{useProxy: false, urlFunc: originFunc})
+	}
+
+	if len(strategies) == 0 {
+		return nil, errors.New("没有可用的订阅下载策略")
 	}
 
 	// UA 列表池
@@ -331,65 +359,69 @@ func FetchSubsData(rawURL string) ([]byte, error) {
 	}
 
 	// GitHub 地址使用浏览器 ua 和curl
-	if strings.Contains(rawURL, "githubusercontent.com") {
+	if isGitHubContentURL(parsedURL) {
 		uaList = []string{
 			convert.RandUserAgent(),
-			"curl/8.16.0",
 		}
 	}
 
-	var (
-		// permDead 已确认「重试也没用」的 (目标URL|是否代理)，后续轮次直接跳过
-		permDead = make(map[string]struct{})
-		// timeoutCnt 每个 (目标URL|是否代理) 的超时次数，达到 2 次后不再尝试
-		timeoutCnt = make(map[string]int)
-		rounds     int
-	)
+	// 当前调用内的永久失败策略；避免重复消耗网络和并发槽位。
+	permDead := make(map[string]struct{}, len(candidates)*len(strategies))
+	// 响应阶段超时最多允许一次额外尝试。
+	timeoutCnt := make(map[string]uint8, len(candidates)*len(strategies))
 
-	for i := range maxRetries + 1 {
-		rounds++
-		ua := uaList[i%len(uaList)]
-		if i > 0 {
+	var lastErr error
+	attempts := maxRetries + 1
+
+	for round := 0; round < attempts; round++ {
+		if round > 0 {
 			time.Sleep(time.Duration(max(1, conf.SubUrlsRetryInterval)) * time.Second)
 		}
 
-		// 本轮是否还存在「值得下一轮再试」的失败
+		ua := uaList[round%len(uaList)]
 		retryable := false
+		triedThisRound := make(map[string]struct{}, len(candidates)*len(strategies))
 
 		for _, candidate := range candidates {
-			triedInThisLoop := make(map[string]struct{})
-
 			for _, strat := range strategies {
 				targetURL := strat.urlFunc(candidate)
-
 				key := targetURL + "|" + strconv.FormatBool(strat.useProxy)
 
-				if _, tried := triedInThisLoop[key]; tried {
+				if _, ok := triedThisRound[key]; ok {
 					continue
 				}
-				triedInThisLoop[key] = struct{}{}
+				triedThisRound[key] = struct{}{}
 
-				// 之前的轮次已确认不可恢复，不再浪费时间
 				if _, dead := permDead[key]; dead {
 					continue
 				}
 
-				// 保持 Debug，过于频繁的尝试详情不需要 Info
-				slog.Debug("尝试下载", "Target", targetURL, "Proxy", strat.useProxy)
+				slog.Debug("尝试下载", "Target", targetURL, "Proxy", strat.useProxy, "round", round+1)
 
 				body, fail := fetchOnce(targetURL, strat.useProxy, timeout, ua)
 				if fail == nil {
 					return body, nil
 				}
+
 				lastErr = fail.err
 
+				// 如果致命失败(404/410/文件过大)，并且不存在占位符，直接短路放弃所有其它策略的重试
 				if fail.fatal && !hasPlaceholder {
 					return nil, fail.err
 				}
 
+				var se *statusError
+				if errors.As(fail.err, &se) &&
+					(se.code == http.StatusUnauthorized || se.code == http.StatusForbidden) &&
+					strat.useProxy {
+					slog.Debug("代理访问被拒，尝试下一策略", "URL", targetURL, "status", se.code)
+				}
+
 				switch fail.class {
 				case failPermanent:
+					// 404/410 等只杀死当前策略，不阻止其它代理策略继续尝试。
 					permDead[key] = struct{}{}
+
 				case failTimeout:
 					timeoutCnt[key]++
 					if timeoutCnt[key] >= 2 {
@@ -397,21 +429,19 @@ func FetchSubsData(rawURL string) ([]byte, error) {
 					} else {
 						retryable = true
 					}
+
 				default:
 					retryable = true
 				}
-
-				// 401/403 时给一个提示，方便调试
-				var se *statusError
-				if errors.As(fail.err, &se) && (se.code == 401 || se.code == 403) && strat.useProxy {
-					slog.Debug("代理访问被拒，尝试下一策略", "URL", targetURL, "status", se.code)
-				}
 			}
 		}
+
+		// 日期占位符的语义是尝试今天和昨天，不再额外重复整轮请求。
+		// ErrIgnore 假定声明于包中其它文件，若非如此请自补定义
 		if hasPlaceholder {
 			return nil, ErrIgnore
 		}
-		// 本轮没有任何值得重试的失败：立即结束，不再 sleep、不再空转下一轮
+
 		if !retryable {
 			break
 		}
@@ -420,10 +450,11 @@ func FetchSubsData(rawURL string) ([]byte, error) {
 	if lastErr == nil {
 		lastErr = errors.New("未知错误")
 	}
-	// 首轮就没有可重试项：原样返回底层错误，保留状态码/DNS 等可识别信息，便于报告展示
-	if rounds == 1 {
+
+	if maxRetries == 0 {
 		return nil, lastErr
 	}
+
 	return nil, fmt.Errorf("%d次重试后失败: %w", maxRetries, lastErr)
 }
 
@@ -451,19 +482,18 @@ func getClient(proxyAddr string) *http.Client {
 
 	// 设置代理
 	if proxyAddr != "direct" {
-		if u, err := url.Parse(proxyAddr); err == nil {
+		if u, err := url.Parse(proxyAddr); err == nil && u.Scheme != "" && u.Host != "" {
 			transport.Proxy = http.ProxyURL(u)
 		}
 	} else {
 		transport.Proxy = nil
 	}
 
-	// 创建 Client
-	// timeout := max(10, config.GlobalConfig.SubUrlsTimeout)
-	// 设置一个较大的超时，以在调用时控制超时
+	// 请求级 context 负责超时。这里不能设置固定的 Client.Timeout，
+	// 否则配置超过 60 秒时仍会被隐藏上限截断。
 	newClient := &http.Client{
 		Transport: transport,
-		Timeout:   60 * time.Second,
+		Timeout:   0,
 	}
 
 	// LoadOrStore 保证并发安全：如果其他协程已经创建了，就用它的，否则用我的
@@ -480,8 +510,23 @@ func fetchOnce(target string, useProxy bool, timeoutSec int, ua string) ([]byte,
 	// 1. 确定 Client Key
 	proxyKey := "direct"
 	if useProxy {
-		if p := config.GlobalConfig.SystemProxy; p != "" {
-			proxyKey = p // 使用代理地址作为 Key
+		proxyKey = strings.TrimSpace(config.GlobalConfig.SystemProxy)
+		if proxyKey == "" {
+			return nil, &fetchFailure{
+				err:   errors.New("系统代理地址为空"),
+				class: failPermanent,
+			}
+		}
+
+		proxyURL, err := url.Parse(proxyKey)
+		if err != nil || proxyURL.Scheme == "" || proxyURL.Host == "" {
+			if err == nil {
+				err = errors.New("代理 URL 缺少协议或主机名")
+			}
+			return nil, &fetchFailure{
+				err:   fmt.Errorf("系统代理地址无效: %w", err),
+				class: failPermanent,
+			}
 		}
 	}
 
@@ -489,12 +534,13 @@ func fetchOnce(target string, useProxy bool, timeoutSec int, ua string) ([]byte,
 	client := getClient(proxyKey)
 
 	// 3. 创建带超时的连接
+	timeoutSec = max(1, timeoutSec)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
 
 	defer cancel()
 
 	// 4. 创建请求
-	req, err := http.NewRequestWithContext(ctx, "GET", target, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, &fetchFailure{err: err, class: failPermanent}
 	}
@@ -521,7 +567,11 @@ func fetchOnce(target string, useProxy bool, timeoutSec int, ua string) ([]byte,
 
 	// 4.1 GitHub 域名：使用 Token 提升速率限制 (未认证 60次/h → 认证 5000次/h)
 	if isGitHubRequest(req.URL) {
-		req.Header.Set("Accept", "application/vnd.github.v3+json")
+		if strings.EqualFold(req.URL.Hostname(), "api.github.com") {
+			req.Header.Set("Accept", "application/vnd.github+json")
+		} else {
+			req.Header.Set("Accept", "*/*")
+		}
 		// GitHub 域名：使用 Token 提升速率限制 (未认证 60次/h → 认证 5000次/h)
 		utils.InjectGitHubToken(req, config.GlobalConfig.GithubToken)
 	}
@@ -549,15 +599,17 @@ func fetchOnce(target string, useProxy bool, timeoutSec int, ua string) ([]byte,
 	}
 	defer resp.Body.Close()
 
+	// 收到 HTTP 响应即证明目标主机/上游代理连接成功。
+	// host breaker 只统计连接层失败，因此此处立即清除旧的连接失败记录。
+	subHostBreaker.ok(breakerKey)
+	if proxyBreakerKey != "" {
+		subHostBreaker.ok(proxyBreakerKey)
+	}
+
 	if resp.StatusCode >= 400 {
 		// 读取128KB，超过的放弃连接复用
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 128*1024))
 		slog.Debug("错误", "url", req.URL, "代理", useProxy, "状态码", resp.StatusCode, "UA", req.UserAgent())
-		// 能收到 HTTP 响应说明主机（及上游代理）是通的，清除熔断计数
-		subHostBreaker.ok(breakerKey)
-		if proxyBreakerKey != "" {
-			subHostBreaker.ok(proxyBreakerKey)
-		}
 		// 401/403 仅是"访问受阻"，不阻断后续策略；404/410 为 fatal
 		return nil, classifyStatus(resp.StatusCode)
 	}
@@ -566,10 +618,7 @@ func fetchOnce(target string, useProxy bool, timeoutSec int, ua string) ([]byte,
 	if fail != nil {
 		return nil, fail
 	}
-	subHostBreaker.ok(breakerKey)
-	if proxyBreakerKey != "" {
-		subHostBreaker.ok(proxyBreakerKey)
-	}
+
 	return body, nil
 }
 
@@ -579,13 +628,32 @@ func fetchOnce(target string, useProxy bool, timeoutSec int, ua string) ([]byte,
 //  1. 先读 sniffBytes 做嗅探，含 NUL 的二进制内容立即中止，不再把几十上百 MB 的垃圾文件读进内存；
 //  2. Content-Length 已知时一次性预分配，避免 ReadAll 的倍增扩容（峰值内存约为数据量的 2~3 倍）。
 func readSubscriptionBody(resp *http.Response) ([]byte, *fetchFailure) {
+	maxBytes := currentMaxSubscriptionBytes()
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxSubscriptionBytes
+	}
+
 	// 如果 Content-Length 存在且超过限制，直接报错，避免无谓的读取
-	if resp.ContentLength > maxSubscriptionBytes {
+	if resp.ContentLength > maxBytes {
 		return nil, &fetchFailure{
-			err:   fmt.Errorf("%w: %d MB", errTooLarge, resp.ContentLength>>20),
+			err: fmt.Errorf(
+				"%w: %.1f MB（限制 %d MB）",
+				errTooLarge,
+				float64(resp.ContentLength)/(1<<20),
+				maxBytes>>20,
+			),
 			class: failPermanent,
 			fatal: true,
 		}
+	}
+
+	if resp.ContentLength >= warnLimitSize {
+		slog.Warn(
+			"订阅文件较大",
+			"size_mb", fmt.Sprintf("%.1f", float64(resp.ContentLength)/(1<<20)),
+			"warn_mb", warnLimitSize>>20,
+			"limit_mb", maxBytes>>20,
+		)
 	}
 
 	// 1. 头部嗅探
@@ -598,6 +666,24 @@ func readSubscriptionBody(resp *http.Response) ([]byte, *fetchFailure) {
 	if bytes.IndexByte(head, 0) >= 0 {
 		return nil, &fetchFailure{err: errNotText, class: failPermanent}
 	}
+
+	if n == 0 {
+		return nil, &fetchFailure{err: errEmptySubscription, class: failPermanent}
+	}
+
+	if int64(n) > maxBytes {
+		return nil, &fetchFailure{
+			err: fmt.Errorf(
+				"%w: %.1f MB（限制 %d MB）",
+				errTooLarge,
+				float64(n)/(1<<20),
+				maxBytes>>20,
+			),
+			class: failPermanent,
+			fatal: true,
+		}
+	}
+
 	if err != nil {
 		// 响应体不足 sniffBytes，已经读完
 		return head, nil
@@ -608,23 +694,42 @@ func readSubscriptionBody(resp *http.Response) ([]byte, *fetchFailure) {
 	if cl := resp.ContentLength; cl > 0 {
 		// 额外留出 bytes.MinRead：Buffer.ReadFrom 每轮都要求至少 MinRead 的空闲空间，
 		// 否则在读到 EOF 之前会多触发一次整体倍增扩容。
-		capHint = int(min(cl, maxPreallocBytes)) + bytes.MinRead
+		capHint = int(min(cl, int64(maxPreallocBytes))) + bytes.MinRead
 	}
 	capHint = max(capHint, n+bytes.MinRead)
 
 	buf := bytes.NewBuffer(make([]byte, 0, capHint))
-	buf.Write(head)
-	// 多读 1 字节用于判断是否超限
-	if _, err := buf.ReadFrom(io.LimitReader(resp.Body, maxSubscriptionBytes-int64(n)+1)); err != nil {
+	_, _ = buf.Write(head)
+
+	// 多读 1 字节用于判断是否超限。
+	remain := maxBytes - int64(n) + 1
+	if _, err := buf.ReadFrom(io.LimitReader(resp.Body, remain)); err != nil {
 		return nil, classifyTransportError(err)
 	}
-	if buf.Len() > maxSubscriptionBytes {
+
+	size := int64(buf.Len())
+	if size > maxBytes {
 		return nil, &fetchFailure{
-			err:   fmt.Errorf("%w: 超过 %d MB 限制", errTooLarge, maxSubscriptionBytes>>20),
+			err: fmt.Errorf(
+				"%w: %.1f MB（限制 %d MB）",
+				errTooLarge,
+				float64(size)/(1<<20),
+				maxBytes>>20,
+			),
 			class: failPermanent,
 			fatal: true,
 		}
 	}
+
+	if size >= warnLimitSize {
+		slog.Warn(
+			"订阅文件较大",
+			"size_mb", fmt.Sprintf("%.1f", float64(size)/(1<<20)),
+			"warn_mb", warnLimitSize>>20,
+			"limit_mb", maxBytes>>20,
+		)
+	}
+
 	return buf.Bytes(), nil
 }
 
@@ -633,20 +738,31 @@ func buildCandidateURLs(u string) ([]string, bool) {
 	if !hasDatePlaceholder(u) {
 		return []string{u}, false
 	}
+
 	now := time.Now()
-	yest := now.AddDate(0, 0, -1)
+	yesterdayTime := now.AddDate(0, 0, -1)
 	today := replaceDatePlaceholders(u, now)
-	yesterday := replaceDatePlaceholders(u, yest)
+	yesterday := replaceDatePlaceholders(u, yesterdayTime)
+
 	slog.Debug("检测到日期占位符，将尝试今日和昨日日期")
+
+	if today == yesterday {
+		return []string{today}, true
+	}
 	return []string{today, yesterday}, true
 }
 
 func hasDatePlaceholder(s string) bool {
 	ls := strings.ToLower(s)
-	return strings.Contains(ls, "{ymd}") || strings.Contains(ls, "{y}") ||
-		strings.Contains(ls, "{m}") || strings.Contains(ls, "{mm}") ||
-		strings.Contains(ls, "{d}") || strings.Contains(ls, "{dd}") ||
-		strings.Contains(ls, "{y-m-d}") || strings.Contains(ls, "{y_m_d}")
+	return strings.Contains(ls, "{ymd}") ||
+		strings.Contains(ls, "{y-m-d}") ||
+		strings.Contains(ls, "{y_m_d}") ||
+		strings.Contains(ls, "{yy}") ||
+		strings.Contains(ls, "{y}") ||
+		strings.Contains(ls, "{mm}") ||
+		strings.Contains(ls, "{m}") ||
+		strings.Contains(ls, "{dd}") ||
+		strings.Contains(ls, "{d}")
 }
 
 func replaceDatePlaceholders(s string, t time.Time) string {
@@ -668,11 +784,24 @@ func isLocalRequest(u *url.URL) bool {
 // isGitHubRequest 判断是否为 GitHub 相关域名
 // 涵盖 API、raw 内容、releases 下载等场景
 func isGitHubRequest(u *url.URL) bool {
-	host := strings.ToLower(u.Hostname())
+	if u == nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
 	return host == "github.com" ||
 		host == "api.github.com" ||
 		host == "raw.githubusercontent.com" ||
 		host == "objects.githubusercontent.com" ||
 		strings.HasSuffix(host, ".github.com") ||
+		strings.HasSuffix(host, ".githubusercontent.com")
+}
+
+func isGitHubContentURL(u *url.URL) bool {
+	if u == nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	return host == "raw.githubusercontent.com" ||
+		host == "objects.githubusercontent.com" ||
 		strings.HasSuffix(host, ".githubusercontent.com")
 }
