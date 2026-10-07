@@ -27,7 +27,7 @@ const (
 
 // ngProbeTargets 探测目标，任意一个连通即视为本机网络正常。
 // 选用公共 DNS 的 TCP 端口，只做握手后立即关闭，不产生实际流量。
-var ngProbeTargets = []string{"223.5.5.5:53", "119.29.29.29:53", "1.1.1.1:443"}
+var ngProbeTargets = []string{"223.5.5.5:53", "119.29.29.29:53", "114.114.114.114:53", "1.1.8.8:53"}
 
 type netGuard struct {
 	running  atomic.Bool  // 后台探针是否在运行
@@ -117,6 +117,7 @@ func (g *netGuard) Start(ctx context.Context) {
 		ticker := time.NewTicker(ngProbeInterval)
 		defer ticker.Stop()
 
+		warned := false
 		bad, good := 0, 0
 		for {
 			select {
@@ -134,7 +135,7 @@ func (g *netGuard) Start(ctx context.Context) {
 				bad = 0
 				// 连续 2 次正常才认为恢复，避免抖动
 				if good >= 2 && g.degraded.CompareAndSwap(true, false) {
-					slog.Info("本机网络已恢复，继续检测")
+					slog.Debug("本机网络已恢复，继续检测")
 				}
 				continue
 			}
@@ -144,7 +145,14 @@ func (g *netGuard) Start(ctx context.Context) {
 			g.lastBad.Store(time.Now().UnixNano())
 			// 连续 2 次异常才判定拥塞
 			if bad >= 2 && g.degraded.CompareAndSwap(false, true) {
-				slog.Warn("检测到本机网络拥塞（连接数或带宽过高），暂缓新任务并复核失败节点", "rtt", rtt, "ok", ok)
+				if !warned {
+					warned = true
+					slog.Warn("检测到本机网络拥塞！已自动触发拥塞保护暂缓任务。")
+					slog.Warn("💡 提示：这通常是并发过高导致路由器NAT/带宽遇到瓶颈。请根据设备性能与网络环境量力而行，建议适当调低并发数。")
+				} else {
+					// 后续的再次拥塞降级为 Debug
+					slog.Debug("检测到本机网络再次拥塞，已暂缓新任务", "rtt", rtt, "ok", ok)
+				}
 			}
 		}
 	}()
@@ -193,6 +201,10 @@ func (g *netGuard) WaitSettled(ctx context.Context, maxWait time.Duration) bool 
 		if ok && rtt <= g.limit() {
 			good++
 			if good >= 2 {
+				// 只有之前处于拥塞状态打印过等待日志，现在才打印恢复日志
+				if announced {
+					slog.Info("本机网络已完全恢复，即将完成任务")
+				}
 				return true
 			}
 		} else {
@@ -201,12 +213,12 @@ func (g *netGuard) WaitSettled(ctx context.Context, maxWait time.Duration) bool 
 				return false // 探针在本环境不可用
 			}
 			if !announced {
-				slog.Info("本机网络尚未恢复，等待恢复后再继续", "rtt", rtt, "ok", ok)
+				slog.Info("检测任务已完成，正在等待本机网络从拥塞中恢复...")
 				announced = true
 			}
 		}
 		if time.Now().After(deadline) {
-			slog.Warn("等待本机网络恢复超时，继续执行")
+			slog.Warn("等待本机网络恢复超时，强制继续执行")
 			return false
 		}
 		select {
