@@ -218,6 +218,8 @@ var OriginDefaultConfig = &Config{
 	// 10 万原始节点触发一次；百万量级约 10 次 GC，CPU 开销可忽略
 	SubsDedupeBatch: 100000,
 
+	SubUrlMaxSizeMB: 50,
+
 	UseLastResult:    false,
 	UseHistoryResult: false,
 
