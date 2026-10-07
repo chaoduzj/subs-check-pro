@@ -43,3 +43,6 @@ speed_*.csv
 .vscode/
 
 !Subs-Check-PRO_OG.png
+monitor.ps1
+.gitignore
+monitor.csv

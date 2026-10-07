@@ -47,7 +47,7 @@ func cfCommonHeaders() map[string]string {
 
 // CheckCloudflare 检测当前客户端是否可以访问 Cloudflare CDN
 func CheckCloudflare(httpClient *http.Client) (cloudflare bool, cfRelayLoc string, cfRelayIP string) {
-	const retries = 3
+	const retries = 2
 	var ok bool
 	var err error
 
@@ -103,10 +103,10 @@ func FetchCFTraceFirstConcurrent(httpClient *http.Client, ctx context.Context, c
 		ip  string
 	}
 
-	// 乱序 + 截取前2, 减轻网络负载
+	// 乱序 + 截取前1, 减轻网络负载
 	apis := shuffle(CfCdnApis)
-	if len(apis) > 2 {
-		apis = apis[:2]
+	if len(apis) > 1 {
+		apis = apis[:1]
 	}
 
 	resultChan := make(chan result, 1)
@@ -114,7 +114,7 @@ func FetchCFTraceFirstConcurrent(httpClient *http.Client, ctx context.Context, c
 	var wg sync.WaitGroup
 
 	// 订阅拉取的重试次数不适合直接用在这里：过大时会在失败后紧贴着狂刷请求；为 0 时则一次都不会请求
-	retries := min(max(config.GlobalConfig.SubUrlsReTry, 1), 2)
+	retries := min(max(config.GlobalConfig.SubUrlsReTry, 1), 1)
 
 	for _, baseURL := range apis {
 		wg.Add(1)

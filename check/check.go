@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"os"
 	"regexp"
 	"runtime/debug"
 	"sort"
@@ -64,7 +65,7 @@ var (
 	progressWeight ProgressWeight
 )
 
-const MediaCheckMaxRetries = 3
+const MediaCheckMaxRetries = 2
 
 // mediaPlatformParallel 单个节点做媒体检测时，各平台检测的最大并行数。
 // 原先 len(platforms) 个平台同时开跑，每个平台都会新建一条经由代理的连接（含 TLS 握手），
@@ -1580,14 +1581,36 @@ func isRetryable(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
-	if netErr, ok := errors.AsType[net.Error](err); ok {
-		// Timeout() 涵盖 i/o timeout、TLS handshake timeout 等
-		return netErr.Timeout()
-	}
-	// connection reset by peer / unexpected EOF
-	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) {
+
+	// 网络错误
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
+
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+
+	var sysErr *os.SyscallError
+	if errors.As(err, &sysErr) {
+		switch {
+		case errors.Is(sysErr.Err, syscall.ECONNRESET):
+			return true
+
+		case errors.Is(sysErr.Err, syscall.EPIPE):
+			return true
+
+		case errors.Is(sysErr.Err, syscall.ETIMEDOUT):
+			return true
+		}
+	}
+
 	return false
 }
 
