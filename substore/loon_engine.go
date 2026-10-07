@@ -308,7 +308,6 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 			case "warn":
 				e.logger.Warn(msg)
 			case "error":
-				slog.Error(msg)
 				e.logger.Error(msg)
 			default:
 				e.logger.Debug(msg)
@@ -346,7 +345,7 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 
 			var opts RequestOpts
 			if err := json.Unmarshal([]byte(reqOptsJSON), &opts); err != nil {
-				slog.Error("脚本底层解析 HTTP 参数失败", "err", err, "reqId", jsReqId)
+				slog.Debug("脚本底层解析 HTTP 参数失败", "err", err, "reqId", jsReqId)
 				e.logger.Error("脚本底层解析 HTTP 参数失败", "err", err, "reqId", jsReqId)
 			}
 
@@ -354,7 +353,7 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 				// 防范底层 Panic 导致任务静默死亡
 				defer func() {
 					if r := recover(); r != nil {
-						slog.Error("脚本底层网络协程崩溃 (已拦截)", "url", opts.URL, "panic", r)
+						slog.Debug("脚本底层网络协程崩溃 (已拦截)", "url", opts.URL, "panic", r)
 						e.logger.Error("脚本底层网络协程崩溃 (已拦截)", "url", opts.URL, "panic", r)
 					}
 				}()
@@ -440,7 +439,7 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 					if err != nil {
 						errStr := err.Error()
 						res.Error = &errStr
-						slog.Error("脚本底层网络请求失败", "method", httpReq.Method, "url", opts.URL, "err", errStr)
+						slog.Debug("脚本底层网络请求失败", "method", httpReq.Method, "url", opts.URL, "err", errStr)
 						e.logger.Error("脚本底层网络请求失败", "method", httpReq.Method, "url", opts.URL, "err", errStr)
 					} else {
 						defer httpResp.Body.Close()
@@ -452,7 +451,7 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 							if len(snippet) > 200 {
 								snippet = snippet[:200] + "..."
 							}
-							slog.Error("API 请求被拒绝", "method", httpReq.Method, "url", opts.URL, "status", httpResp.StatusCode, "response", snippet)
+							slog.Debug("API 请求被拒绝", "method", httpReq.Method, "url", opts.URL, "status", httpResp.StatusCode, "response", snippet)
 							e.logger.Error("API 请求被拒绝", "method", httpReq.Method, "url", opts.URL, "status", httpResp.StatusCode, "response", snippet)
 						}
 

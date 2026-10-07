@@ -356,7 +356,7 @@ func (s *LoonServer) executeDetached(clientCtx context.Context, key string, req 
 			call.resp, call.err = engine.Execute(s.baseCtx, req, argument)
 			// 记录由于客户端断开导致的后台执行错误，避免错误被静默吞噬
 			if call.err != nil {
-				slog.Error("后台脱机任务执行失败", "url", req.URL, "err", call.err)
+				slog.Debug("后台脱机任务执行失败", "url", req.URL, "err", call.err)
 			}
 		}()
 	}
