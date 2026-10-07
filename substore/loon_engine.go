@@ -19,11 +19,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/buke/quickjs-go"
 	"github.com/goccy/go-json"
 	"github.com/sinspired/subs-check-pro/v3/config"
 	"github.com/sinspired/subs-check-pro/v3/utils"
-
-	"github.com/buke/quickjs-go"
 )
 
 type LoonHTTPRequest struct {
@@ -309,6 +308,7 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 			case "warn":
 				e.logger.Warn(msg)
 			case "error":
+				slog.Error(msg)
 				e.logger.Error(msg)
 			default:
 				e.logger.Debug(msg)
@@ -325,7 +325,7 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 			type RequestOpts struct {
 				URL          string            `json:"url"`
 				Headers      map[string]string `json:"headers"`
-				Body         string            `json:"body"`
+				Body         any               `json:"body"` // 兼容 JS 传递的对象/数组
 				BodyB64      bool              `json:"body-base64"`
 				BodyBase64   bool              `json:"bodyBase64"`
 				Timeout      int               `json:"timeout"`
@@ -333,8 +333,6 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 				Redirection  *bool             `json:"redirection"`
 				BinaryMode   bool              `json:"binary-mode"`
 			}
-			var opts RequestOpts
-			_ = json.Unmarshal([]byte(reqOptsJSON), &opts)
 
 			type ResponseObject struct {
 				Status  int               `json:"status"`
@@ -346,21 +344,50 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 				ReqId    string          `json:"reqId,omitempty"`
 			}
 
+			var opts RequestOpts
+			if err := json.Unmarshal([]byte(reqOptsJSON), &opts); err != nil {
+				slog.Error("脚本底层解析 HTTP 参数失败", "err", err, "reqId", jsReqId)
+				e.logger.Error("脚本底层解析 HTTP 参数失败", "err", err, "reqId", jsReqId)
+			}
+
 			go func() {
+				// 防范底层 Panic 导致任务静默死亡
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("脚本底层网络协程崩溃 (已拦截)", "url", opts.URL, "panic", r)
+						e.logger.Error("脚本底层网络协程崩溃 (已拦截)", "url", opts.URL, "panic", r)
+					}
+				}()
+
 				res := GoResult{}
 				var bodyReader io.Reader
-				if opts.Body != "" {
-					if opts.BodyB64 || opts.BodyBase64 {
-						if decoded, err := base64.StdEncoding.DecodeString(opts.Body); err == nil {
-							bodyReader = bytes.NewReader(decoded)
-						}
-					} else {
-						bodyReader = strings.NewReader(opts.Body)
+
+				var bodyStr string
+				if opts.Body != nil {
+					switch v := opts.Body.(type) {
+					case string:
+						bodyStr = v
+					default:
+						// 将 Object/Array 回退为 JSON 字符串
+						b, _ := json.Marshal(v)
+						bodyStr = string(b)
 					}
 				}
 
-				// 支持脚本自定超时，增加上限阻断死锁
-				timeoutMs := 30000
+				if bodyStr != "" {
+					if opts.BodyB64 || opts.BodyBase64 {
+						if decoded, err := base64.StdEncoding.DecodeString(bodyStr); err == nil {
+							bodyReader = bytes.NewReader(decoded)
+						} else {
+							bodyReader = strings.NewReader(bodyStr)
+						}
+					} else {
+						bodyReader = strings.NewReader(bodyStr)
+					}
+				}
+
+				// 提升默认超时时间以应对 Gist 备份大文件
+				timeoutMs := 60000
 				if opts.Timeout > 0 {
 					timeoutMs = min(opts.Timeout, 300000)
 				}
@@ -372,16 +399,23 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 					errStr := err.Error()
 					res.Error = &errStr
 				} else {
+					// 强制方法大写，防止严格网关拒绝小写方法 (如 patch)
+					httpReq.Method = strings.ToUpper(httpReq.Method)
+
 					for k, v := range opts.Headers {
+						// 拦截 Accept-Encoding / Content-Length 强制开启 Go 内部自动 Gzip/Brotli 压缩处理
+						if strings.EqualFold(k, "Accept-Encoding") || strings.EqualFold(k, "Content-Length") {
+							continue
+						}
 						httpReq.Header.Set(k, v)
 					}
+
 					var timing *netTiming
 					if e.netDebug {
 						timing = &netTiming{start: time.Now()}
 						httpReq = httpReq.WithContext(httptrace.WithClientTrace(httpReq.Context(), timing.trace()))
 					}
 
-					// 拦截重定向支持
 					client := e.httpClient
 					shouldRedirect := true
 					if opts.AutoRedirect != nil {
@@ -397,7 +431,7 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 						client = &clientCopy
 					}
 
-					canRetry := strings.EqualFold(method, "GET") && opts.Body == ""
+					canRetry := strings.EqualFold(method, "GET") && bodyStr == ""
 					httpResp, err := doWithRetry(reqCtx, client, httpReq, canRetry)
 					if timing != nil {
 						timing.total = time.Since(timing.start)
@@ -406,9 +440,22 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 					if err != nil {
 						errStr := err.Error()
 						res.Error = &errStr
+						slog.Error("脚本底层网络请求失败", "method", httpReq.Method, "url", opts.URL, "err", errStr)
+						e.logger.Error("脚本底层网络请求失败", "method", httpReq.Method, "url", opts.URL, "err", errStr)
 					} else {
 						defer httpResp.Body.Close()
 						bodyBytes, _ := io.ReadAll(io.LimitReader(httpResp.Body, 64<<20))
+
+						// 状态码异常拦截，记录关键响应体
+						if httpResp.StatusCode >= 400 {
+							snippet := string(bodyBytes)
+							if len(snippet) > 200 {
+								snippet = snippet[:200] + "..."
+							}
+							slog.Error("API 请求被拒绝", "method", httpReq.Method, "url", opts.URL, "status", httpResp.StatusCode, "response", snippet)
+							e.logger.Error("API 请求被拒绝", "method", httpReq.Method, "url", opts.URL, "status", httpResp.StatusCode, "response", snippet)
+						}
+
 						res.Response = &ResponseObject{
 							Status:  httpResp.StatusCode,
 							Headers: make(map[string]string),
@@ -417,7 +464,6 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 							res.Response.Headers[strings.ToLower(k)] = v[0]
 						}
 
-						// 处理二进制响应要求为 Base64
 						var storeBodyStr string
 						if opts.BinaryMode {
 							storeBodyStr = base64.StdEncoding.EncodeToString(bodyBytes)
@@ -463,6 +509,26 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 			return ctx.Null()
 		}))
 
+		globals.Set("__go_set_timeout", ctx.NewFunction(func(ctx *quickjs.Context, this *quickjs.Value, args []*quickjs.Value) *quickjs.Value {
+			if len(args) < 2 {
+				return ctx.Undefined()
+			}
+			id := args[0].String()
+			delay := args[1].Int32()
+
+			// 启动 Go 语言级高精度休眠协程，休眠结束后通过 Schedule 唤醒 JS 上下文
+			go func() {
+				if delay > 0 {
+					time.Sleep(time.Duration(delay) * time.Millisecond)
+				}
+				ctx.Schedule(func(inner *quickjs.Context) {
+					fireCode := fmt.Sprintf(`__fire_timer("%s");`, id)
+					inner.Eval(fireCode).Free()
+				})
+			}()
+			return ctx.Undefined()
+		}))
+
 		reqMap := map[string]any{"url": req.URL, "method": req.Method, "headers": req.Headers}
 		if req.Body != "" {
 			reqMap["body"] = req.Body
@@ -484,9 +550,36 @@ func (e *LoonEngine) Execute(execCtx context.Context, req *LoonHTTPRequest, argu
 		bytecodeVal.Free()
 
 		runScript := `
+		// --- 注入事件循环：解决 QuickJS 原生定时器挂起问题 ---
+		globalThis.__timer_id = 0;
+		globalThis.__timers = {};
+		globalThis.setTimeout = function(fn, delay) {
+			let id = String(++globalThis.__timer_id);
+			globalThis.__timers[id] = fn;
+			__go_set_timeout(id, Number(delay) || 0);
+			return id;
+		};
+		globalThis.clearTimeout = function(id) {
+			delete globalThis.__timers[id];
+		};
+		// Sub-Store 安全降级
+		globalThis.setInterval = function(fn, delay) {
+			return setTimeout(fn, delay);
+		};
+		globalThis.clearInterval = globalThis.clearTimeout;
+
+		globalThis.__fire_timer = function(id) {
+			if (globalThis.__timers[id]) {
+				let fn = globalThis.__timers[id];
+				delete globalThis.__timers[id]; // 执行前立刻删除，防止阻塞复用
+				try { fn(); } catch(e) { __console_log("error", "Timer Exception: " + String(e)); }
+			}
+		};
+
 		new Promise((resolve, reject) => {
 			globalThis.__resolve_done = resolve;
-			setTimeout(() => { reject(new Error("Sub-Store script timeout inside QuickJS")); }, 179000); // 放宽至将近 3 分钟
+			// 设置 JS 上下文内部的执行超时防卡死机制
+			setTimeout(() => { reject(new Error("Sub-Store script timeout inside QuickJS")); }, 179000);
 			try {
 				$request = JSON.parse(__req_json);
 				$argument = __arg_str;

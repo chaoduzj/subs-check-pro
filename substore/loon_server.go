@@ -156,10 +156,11 @@ func (s *LoonServer) handleBackend(w http.ResponseWriter, r *http.Request) {
 	argument := "cors=" + url.QueryEscape(origin)
 
 	// /download/* 是幂等的只读请求：脚本执行与客户端连接解耦并合并并发请求。
-	// 订阅量大时 JS 引擎处理可能耗时数十秒，而客户端的拉取超时往往更短；
-	// 此前客户端一断开，r.Context() 被取消，脚本内部所有子请求随之失败，缓存永远预热不起来。
-	detach := (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
-		strings.HasPrefix(strippedPath, "/download/")
+	// /api/utils/backup 和 /api/sync/artifacts 等云同步操作也解耦，保证即使前端超时断开，后台也能完整跑完备份逻辑。
+	detach := (r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodPost) &&
+		(strings.HasPrefix(strippedPath, "/download/") ||
+			strings.HasPrefix(strippedPath, "/api/utils/backup") ||
+			strings.HasPrefix(strippedPath, "/api/sync/artifacts"))
 
 	var resp *LoonHTTPResponse
 	if detach {
@@ -353,6 +354,10 @@ func (s *LoonServer) executeDetached(clientCtx context.Context, key string, req 
 			}()
 			// 使用与连接脱钩的 baseCtx 执行
 			call.resp, call.err = engine.Execute(s.baseCtx, req, argument)
+			// 记录由于客户端断开导致的后台执行错误，避免错误被静默吞噬
+			if call.err != nil {
+				slog.Error("后台脱机任务执行失败", "url", req.URL, "err", call.err)
+			}
 		}()
 	}
 	s.inflightMu.Unlock()
@@ -367,8 +372,6 @@ func (s *LoonServer) executeDetached(clientCtx context.Context, key string, req 
 
 // cronHTTPClient 供内置定时任务回调本机 Sub-Store 服务使用：
 //   - 不跟随重定向：内部任务只应访问本机服务，任何 30x 都不该把请求带到外网；
-//     （上游后端对“未匹配的 GET 路径”会兜底 302 到官方前端，这是上游行为，
-//     对浏览器/官方前端的使用保持不变，只是内部定时任务不能跟着跳出去）；
 //   - 不走系统代理：目标始终是 127.0.0.1；
 //   - 设置总超时，避免任务永久挂起。
 var cronHTTPClient = &http.Client{
@@ -537,12 +540,10 @@ func ReloadSubStoreCronJobs() {
 		return
 	}
 
-	// 停止并清空旧的定时任务
 	if oldCron := currentSubStoreCron.Swap(nil); oldCron != nil {
 		oldCron.Stop()
 	}
 
-	// 使用最新配置重新启动定时任务
 	subPortOnly := strings.TrimPrefix(config.GlobalConfig.SubStorePort, ":")
 	newCron := StartSubStoreCronJobs(subPortOnly, InitSubStorePath)
 	if newCron != nil {
