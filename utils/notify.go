@@ -100,7 +100,7 @@ func decorateURL(raw string, kind NotifyKind, downloadURL string) string {
 		return raw
 	}
 
-	q.Set("format", "markdown")
+	// q.Set("format", "markdown")
 
 	switch scheme {
 	case "bark", "barks":
@@ -368,16 +368,11 @@ func broadcastNotify(kind NotifyKind, title, body, downloadURL string) {
 	for _, u := range config.GlobalConfig.RecipientURL {
 		wg.Go(func() {
 			name, _, _ := strings.Cut(u, "://")
-			localTitle := title // 防止 Telegram 修改影响其他并发接收者
-
-			if strings.Contains(name, "tgram") {
-				localTitle = "*" + localTitle + "*"
-			}
 
 			notifyReq := NotifyRequest{
 				URLs:   decorateURL(u, kind, downloadURL),
 				Body:   body,
-				Title:  localTitle,
+				Title:  title,
 				Format: format,
 			}
 			sendWithRetry(notifyReq, name, proxies)
