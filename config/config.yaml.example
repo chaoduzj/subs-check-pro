@@ -55,13 +55,10 @@ concurrent: 10
 success-limit: 100
 
 # 是否加载上次检测结果(all.yaml)
-load-last-result: false
+use-last-result: false
 
-# 是否加载历史检测结果(history.yaml)
-load-history-result: false
-
-# 是否保存历史检测结果(history.yaml)
-save-history-result: false
+# 是否加载并保存历史检测结果(history.yaml)
+use-history-result: false
 
 # -----------下载参数-----------
 # 注意: 节点可能被测速测死(暂时或永久), 经过多次测试, 不用怀疑!

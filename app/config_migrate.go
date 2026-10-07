@@ -58,7 +58,7 @@ func (app *App) migrateConfig() error {
 	var view migrateConfigView
 	_ = yaml.Unmarshal(data, &view)
 
-	// keep-success-proxies -> load-last-result
+	// keep-success-proxies -> use-last-result
 	if view.KeepSuccessProxies != nil {
 		content = rewriteKeepSuccessProxies(
 			content,
@@ -462,9 +462,8 @@ func rewriteCronExpression(content, newCron string) string {
 //
 // ->
 //
-// load-last-result: true
-// load-history-result: false
-// save-history-result: false
+// use-last-result: true
+// use-history-result: false
 func rewriteKeepSuccessProxies(content string, oldValue bool) string {
 	lines := strings.Split(content, "\n")
 
@@ -492,13 +491,10 @@ func rewriteKeepSuccessProxies(content string, oldValue bool) string {
 			newBlock := []string{
 				"",
 				keyIndent + "# 是否加载上次检测结果(all.yaml)",
-				keyIndent + "load-last-result: " + strconv.FormatBool(oldValue),
+				keyIndent + "use-last-result: " + strconv.FormatBool(oldValue),
 				"",
-				keyIndent + "# 是否加载历史检测结果(history.yaml)",
-				keyIndent + "load-history-result: false",
-				"",
-				keyIndent + "# 是否保存历史检测结果(history.yaml)",
-				keyIndent + "save-history-result: false",
+				keyIndent + "# 是否加载并保存历史检测结果(history.yaml)",
+				keyIndent + "use-history-result: false",
 			}
 
 			out := append([]string{}, lines[:start]...)

@@ -67,7 +67,7 @@ func NewConfigSaver(results []check.Result, historyNodes []map[string]any, saveM
 
 	// 只有在配置开启了保存历史记录时，才将 history.yaml 加入保存队列
 	// 直接使用传入的 historyNodes，因为这批节点已经在 check 阶段完成了加减分、去重和排序
-	if config.GlobalConfig.SaveHistoryResult || config.GlobalConfig.LoadHistoryResult {
+	if config.GlobalConfig.UseHistoryResult {
 		categories = append(categories, ProxyCategory{
 			Name:    "history.yaml",
 			Proxies: historyNodes,

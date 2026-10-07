@@ -110,17 +110,16 @@ type Config struct {
 	// 注意：真正防止 OOM 的是 MemoryLimitMB；这个只是日常情况下的内存/CPU 取舍旋钮。
 	GCPercent int `yaml:"gc-percent"`
 
-	SubUrlsRemote     []string `yaml:"sub-urls-remote"`
-	SubUrls           []string `yaml:"sub-urls"`
-	SuccessRate       float64  `yaml:"success-rate"`
-	MihomoAPIURL      string   `yaml:"mihomo-api-url"`
-	MihomoAPISecret   string   `yaml:"mihomo-api-secret"`
-	ListenPort        string   `yaml:"listen-port"`
-	RenameNode        bool     `yaml:"rename-node"`
-	LoadLastResult    bool     `yaml:"load-last-result"`
-	LoadHistoryResult bool     `yaml:"load-history-result"`
-	SaveHistoryResult bool     `yaml:"save-history-result"`
-	OutputDir         string   `yaml:"output-dir"`
+	SubUrlsRemote    []string `yaml:"sub-urls-remote"`
+	SubUrls          []string `yaml:"sub-urls"`
+	SuccessRate      float64  `yaml:"success-rate"`
+	MihomoAPIURL     string   `yaml:"mihomo-api-url"`
+	MihomoAPISecret  string   `yaml:"mihomo-api-secret"`
+	ListenPort       string   `yaml:"listen-port"`
+	RenameNode       bool     `yaml:"rename-node"`
+	UseLastResult    bool     `yaml:"use-last-result"`
+	UseHistoryResult bool     `yaml:"use-history-result"`
+	OutputDir        string   `yaml:"output-dir"`
 	// ConfigDir 运行时由 app.loadConfig 注入，值为当前配置文件所在目录。
 	// 不参与 YAML 序列化，仅供 save/method/local.go 计算默认输出路径使用。
 	ConfigDir            string   `yaml:"-"`
@@ -218,9 +217,8 @@ var OriginDefaultConfig = &Config{
 	// 10 万原始节点触发一次；百万量级约 10 次 GC，CPU 开销可忽略
 	SubsDedupeBatch: 100000,
 
-	LoadLastResult:    false,
-	LoadHistoryResult: false,
-	SaveHistoryResult: false,
+	UseLastResult:    false,
+	UseHistoryResult: false,
 
 	// Sub-Store 资源默认每周五更新
 	SubStoreUpdateCron: "14 13 * * 5",

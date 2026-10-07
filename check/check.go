@@ -439,12 +439,12 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, []map[string]an
 		)
 	}
 
-	if config.GlobalConfig.LoadLastResult {
-		args = append(args, "load-last-result", true)
+	if config.GlobalConfig.UseLastResult {
+		args = append(args, "use-last-result", true)
 	}
 
-	if config.GlobalConfig.LoadHistoryResult {
-		args = append(args, "load-history-result", true)
+	if config.GlobalConfig.UseHistoryResult {
+		args = append(args, "use-history-result", true)
 	}
 
 	args = append(args, "analysis", "true")

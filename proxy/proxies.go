@@ -549,8 +549,8 @@ func resolveSubUrls(progressCallback func(stepName string, done, total, availabl
 	localLastResultURL := "http://127.0.0.1:" + requiredListenPort + "/all.yaml"
 	localHistoryResultURL := "http://127.0.0.1:" + requiredListenPort + "/history.yaml"
 
-	if config.GlobalConfig.LoadLastResult ||
-		config.GlobalConfig.LoadHistoryResult {
+	if config.GlobalConfig.UseLastResult ||
+		config.GlobalConfig.UseHistoryResult {
 
 		saver, err := method.NewLocalSaver()
 		if err == nil {
@@ -563,7 +563,7 @@ func resolveSubUrls(progressCallback func(stepName string, done, total, availabl
 				)
 			}
 
-			if config.GlobalConfig.LoadLastResult {
+			if config.GlobalConfig.UseLastResult {
 				urls = appendLocalResult(
 					urls,
 					filepath.Join(saver.OutputPath, "all.yaml"),
@@ -573,7 +573,7 @@ func resolveSubUrls(progressCallback func(stepName string, done, total, availabl
 				)
 			}
 
-			if config.GlobalConfig.LoadHistoryResult {
+			if config.GlobalConfig.UseHistoryResult {
 				urls = appendLocalResult(
 					urls,
 					filepath.Join(saver.OutputPath, "history.yaml"),
@@ -601,12 +601,12 @@ func resolveSubUrls(progressCallback func(stepName string, done, total, availabl
 
 			switch key {
 			case localLastResultURL:
-				if !config.GlobalConfig.LoadLastResult {
+				if !config.GlobalConfig.UseLastResult {
 					continue
 				}
 
 			case localHistoryResultURL:
-				if !config.GlobalConfig.LoadHistoryResult {
+				if !config.GlobalConfig.UseHistoryResult {
 					continue
 				}
 			}
