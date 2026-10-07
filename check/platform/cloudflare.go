@@ -103,17 +103,18 @@ func FetchCFTraceFirstConcurrent(httpClient *http.Client, ctx context.Context, c
 		ip  string
 	}
 
-	// 乱序 + 截取前3, 减轻网络负载
+	// 乱序 + 截取前2, 减轻网络负载
 	apis := shuffle(CfCdnApis)
-	if len(apis) > 3 {
-		apis = apis[:3]
+	if len(apis) > 2 {
+		apis = apis[:2]
 	}
 
 	resultChan := make(chan result, 1)
 	var once sync.Once
 	var wg sync.WaitGroup
 
-	retries := config.GlobalConfig.SubUrlsReTry
+	// 订阅拉取的重试次数不适合直接用在这里：过大时会在失败后紧贴着狂刷请求；为 0 时则一次都不会请求
+	retries := min(max(config.GlobalConfig.SubUrlsReTry, 1), 2)
 
 	for _, baseURL := range apis {
 		wg.Add(1)
@@ -132,6 +133,12 @@ func FetchCFTraceFirstConcurrent(httpClient *http.Client, ctx context.Context, c
 						cancel()
 					})
 					return
+				}
+				// 失败后短暂退避再重试
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(300 * time.Millisecond):
 				}
 			}
 		}(baseURL)
@@ -163,11 +170,18 @@ func FetchCFTrace(httpClient *http.Client, ctx context.Context, baseURL string) 
 		req.Header.Set(key, value)
 	}
 
+	// 一次性请求，用完立即关闭连接，避免空闲连接一直占着代理服务器上的连接
+	req.Close = true
+
 	resp, err := httpClient.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
+	if err != nil {
 		return "", ""
 	}
+	// 修复：非 200 时原先直接 return，响应体未关闭导致连接泄漏
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", ""
+	}
 
 	// 增加 LimitReader，防止罕见的恶意节点返回无限数据
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024))
@@ -201,6 +215,8 @@ func checkCFEndpoint(httpClient *http.Client, url string, expectedStatus int) (b
 	for key, value := range cfCommonHeaders() {
 		req.Header.Set(key, value)
 	}
+
+	req.Close = true // 一次性探测，不保留连接
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
