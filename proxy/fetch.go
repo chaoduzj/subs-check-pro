@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/metacubex/mihomo/common/convert"
@@ -46,9 +45,6 @@ var (
 const (
 	warnLimitSize = 20 << 20
 
-	// 配置未初始化或无效时使用的安全默认值。
-	defaultMaxSubscriptionBytes = 50 << 20
-
 	// maxPreallocBytes 按 Content-Length 预分配缓冲区的上限
 	maxPreallocBytes = 32 << 20
 
@@ -69,10 +65,6 @@ const (
 )
 
 var (
-	// maxSubscriptionBytes 单个订阅允许读取的最大字节数。
-	// maxSubscriptionBytes = 100 << 20
-	maxSubscriptionBytes atomic.Int64
-
 	// errNotText 响应体头部含 NUL 字节：二进制文件（图片/压缩包/可执行文件等），不可能是订阅。
 	errNotText           = errors.New("响应内容为二进制数据，不是有效订阅")
 	errEmptySubscription = errors.New("订阅响应内容为空")
@@ -81,15 +73,13 @@ var (
 	errTooLarge = errors.New("订阅文件过大")
 )
 
-func init() {
-	maxSubscriptionBytes.Store(defaultMaxSubscriptionBytes)
-}
-
+// currentMaxSubscriptionBytes 直接从全局配置中读取文件大小限制
 func currentMaxSubscriptionBytes() int64 {
-	if size := maxSubscriptionBytes.Load(); size > 0 {
-		return size
+	if config.GlobalConfig != nil && config.GlobalConfig.SubUrlMaxSizeMB > 0 {
+		return int64(config.GlobalConfig.SubUrlMaxSizeMB) << 20
 	}
-	return defaultMaxSubscriptionBytes
+	// 兜底安全值：如果配置未正常初始化，则默认使用 50MB
+	return 50 << 20
 }
 
 // clientMap 用于缓存不同代理策略的 HTTP Client
@@ -629,9 +619,6 @@ func fetchOnce(target string, useProxy bool, timeoutSec int, ua string) ([]byte,
 //  2. Content-Length 已知时一次性预分配，避免 ReadAll 的倍增扩容（峰值内存约为数据量的 2~3 倍）。
 func readSubscriptionBody(resp *http.Response) ([]byte, *fetchFailure) {
 	maxBytes := currentMaxSubscriptionBytes()
-	if maxBytes <= 0 {
-		maxBytes = defaultMaxSubscriptionBytes
-	}
 
 	// 如果 Content-Length 存在且超过限制，直接报错，避免无谓的读取
 	if resp.ContentLength > maxBytes {
