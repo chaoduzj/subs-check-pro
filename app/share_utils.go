@@ -147,7 +147,7 @@ func (app *App) handleEncryptedShare(basePath string) gin.HandlerFunc {
 				ShowInput:   true,
 				BadgeStyle:  "idle",
 				BadgeText:   "Encrypted",
-				ExtraHint:   template.HTML("开启 <code>keep-success-proxies: true</code> 保留并加载历史节点。"),
+				ExtraHint:   template.HTML("开启<code>use-last-result: true</code> 加载上次检测节点 all.yaml；开启 <code>use-history-result: true</code> 加载并保存历史节点 history.html"),
 			})
 			return
 		}
@@ -180,7 +180,7 @@ func (app *App) handleEncryptedShare(basePath string) gin.HandlerFunc {
 				Files:       readDirFiles(basePath),
 				ShareCode:   serverPassword,
 				FooterText:  "Encrypted Access",
-				ExtraHint:   template.HTML("开启 <code>keep-success-proxies: true</code> 保留及加载历史节点。"),
+				ExtraHint:   template.HTML("开启<code>use-last-result: true</code> 加载上次检测节点 all.yaml；开启 <code>use-history-result: true</code> 加载并保存历史节点 history.html"),
 			})
 			return
 		}
@@ -225,7 +225,7 @@ func (app *App) handleFileShare(basePath string, _ bool) gin.HandlerFunc {
 				BadgeStyle:  "warning",
 				BadgeText:   "Public",
 				FooterText:  "Open Access",
-				ExtraHint:   template.HTML("开启 <code>keep-success-proxies: true</code> 可保留历史节点。"),
+				ExtraHint:   template.HTML("开启<code>use-last-result: true</code> 加载上次检测节点 all.yaml；开启 <code>use-history-result: true</code> 加载并保存历史节点 history.html"),
 			})
 			return
 		}
